@@ -8,7 +8,7 @@
 #define BUFFER_SIZE 128
 #define PROC_NAME "checkroot"
 
-/* To executes when cat /proc/checkroot */
+/* Executes when user runs: cat /proc/checkroot */
 static ssize_t
 proc_read(struct file *file,
 	  char __user *usr_buf,
@@ -18,21 +18,25 @@ proc_read(struct file *file,
   int rv = 0;
   char buffer[BUFFER_SIZE];
 
-  /* Get creds of the current proc */
+  /* Get creds of the current process */
   const struct cred *cred = current_cred();
 
-  /* Verify UID si root (0) */
-  if (cred->uid.val == 0)
-    {
-      rv = sprintf(buffer, "You are root :D\n");
-      printk(KERN_INFO "checkroot: ROOT access\n");
-    }
-  else
-    {
-      rv = sprintf(buffer, "You are not root :P\n");
-      printk(KERN_INFO "checkroot: USER access\n");
-    }
-  
+  /* Extract UID (represents the real identity of the process owner) */
+  kuid_t uid = cred->uid;
+
+  /* Extract EUID (determines whether the process has root privileges) */
+  kuid_t euid = cred->euid;
+    
+  /* Verify if UID is root (0) */
+  if (euid.val == 0) {
+    rv = sprintf(buffer, "You are root :D\nUID: %d\nEUID: %d\n", uid.val, euid.val);
+    printk(KERN_INFO "checkroot: ROOT access\n");
+  }
+  else {
+    rv = sprintf(buffer, "You are not root :P\nUID: %d\nEUID: %d\n", uid.val, euid.val);
+    printk(KERN_INFO "checkroot: USER access\n");
+  }
+  /* Copy data safely from kernel buffer to user space buffer */
   return simple_read_from_buffer(usr_buf, count, ppos, buffer, rv);
 }
 
@@ -60,7 +64,7 @@ checkroot_mod_exit(void)
   printk(KERN_INFO "Removing Kernel Module∖n");
   remove_proc_entry(PROC_NAME, NULL);
 }
-1
+
 /* Macros for registering module entry and exit points. */
 module_init(checkroot_mod_init);
 module_exit(checkroot_mod_exit);

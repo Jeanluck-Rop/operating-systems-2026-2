@@ -152,9 +152,44 @@ void
 simulate_shortest_process_next(Process *p,
 			       int n)
 {
-  //
+  int current_time = 0;
+  int completed = 0;
 
   printf("\n--- Initiating Shortest Process Next ---\n");
+
+  while (completed <n) {
+    int best_index = -1;
+    int min_burst = 999999;
+
+    //The process with the smallest burst that has already occurred is being sought
+    for (int i =0; i<n; i++){
+      //Conditions: It's here, it's not over, and it's the shortest one seen so far
+      if(p[i].arrival <= current_time && p[i].remaining > 0){
+	if (p[i].burst < min_burst){
+	  best_index = i;
+	}
+      }
+    }
+    //No proccesses active, we try again on the next tick (busy-wait / idle advance)
+    if (best_index == -1){
+      current_time++;
+      continue;
+    }
+
+    // Response time is when the signal first touches the CPU.
+    p[best_index].start_time = current_time;
+    p[best_index].response_time = current_time - p[best_index].arrival;
+
+    //Since it's SPN, the process runs until it finishes
+    current_time += p[best_index].burst;
+    //Calculation of final metrics for this process
+    p[best_index].remaining = 0;
+    p[best_index].finish_time = current_time;
+    p[best_index].turnaround = p[best_index].finish_time - p[best_index].arrival;
+    p[best_index].waiting_time = p[best_index].turnaround - p[best_index].burst;
+
+    completed++;
+  }
 }
 
 

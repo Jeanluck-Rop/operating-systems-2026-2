@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MAX_PROCESSES 200 // Simulate processes
 
@@ -17,9 +18,29 @@ typedef struct {
 } Process;
 
 
+/* Enum for handle flag input */
+typedef enum {
+  GUARANTEED,
+  SPN,
+  UNKNOWN
+} Algorithm;
+
+
+/* Parse flag string to flag Enum*/
+Algorithm
+parse_flag(const char* flag)
+{
+  if (strcmp(flag, "-g") == 0)
+    return GUARANTEED;
+  if (strcmp(flag, "-s") == 0)
+    return SPN;
+  return UNKNOWN;
+}
+
+
 /* Prints per-process metrics and averages for Wait, Turnaround and Response time */
 void
-print_metrics(Process *p,
+print_metrics(Process* p,
 	      int n)
 {
   double total_waiting = 0;
@@ -28,12 +49,10 @@ print_metrics(Process *p,
     
   printf("\nID | Arrival | Burst | Start | Finish | Wait | Turnaround | Response\n");
   printf("----------------------------------------------------------------------\n");
-  
   for(int i = 0; i < n; i++) {
     printf("%2d | %7d | %5d | %5d | %6d | %4d | %10d | %8d\n",
 	   p[i].id, p[i].arrival, p[i].burst, p[i].start_time, 
 	   p[i].finish_time, p[i].waiting_time, p[i].turnaround, p[i].response_time);
-
     //Accumulate totals so we can compute averages after the loop
     total_waiting += p[i].waiting_time;
     total_turnaround += p[i].turnaround;
@@ -130,18 +149,19 @@ simulate_guaranteed_scheduling(Process *p,
 
 /* */
 void
-shortest_process_next(Process *p,
-		      int n)
+simulate_shortest_process_next(Process *p,
+			       int n)
 {
   //
+
+  printf("\n--- Initiating Shortest Process Next ---\n");
 }
 
 
 /* */
 int
-main(char* flags)
+setup(Process* processes)
 {
-  Process processes[MAX_PROCESSES];
   int n = 0;
 
   // Read since stdin to EOF, each line must have: id arrival burst priority
@@ -150,7 +170,6 @@ main(char* flags)
 	       &processes[n].arrival,
 	       &processes[n].burst,
 	       &processes[n].priority) == 4) {
-
     processes[n].remaining     = processes[n].burst;
     processes[n].start_time    = -1;
     processes[n].finish_time   = 0;
@@ -158,13 +177,11 @@ main(char* flags)
     processes[n].turnaround    = 0;
     processes[n].response_time = -1;
     n++;
-
     if (n >= MAX_PROCESSES) {
       fprintf(stderr, "MAX_PROCESSES reached=%d\n", MAX_PROCESSES);
       break;
     }
   }
-
   printf("%d processes readed:\n", n);
   for (int i = 0; i < n; i++) {
     printf("Process: %3d:   arrival: %3d   burst: %2d   priority: %d\n",
@@ -173,19 +190,34 @@ main(char* flags)
 	   processes[i].burst,
 	   processes[i].priority);
   }
+  
+  return n;
+}
 
-  if (flags == "-g") {
-    simulate_guaranteed_scheduling(processes, n);
-    print_metrics(processes, n);
-  }
-  else if (flags == "-s") {
-    simulate_guaranteed_scheduling(processes, n);
-    print_metrics(processes, n);
-  }
-  else {
-    undefined;
+
+/* */
+int
+main(int argc, char *argv[])
+{
+  if (argc < 2) {
+    fprintf(stderr, "Use: %s [-g | -s] < <file_name>\n", argv[0]);
+    return 1;
   }
   
+  Process processes[MAX_PROCESSES];
+  int n = setup(processes);
+  switch (parse_flag(argv[1])) {
+  case GUARANTEED:
+    simulate_guaranteed_scheduling(processes, n);
+    break;
+  case SPN:
+    simulate_shortest_process_next(processes, n);
+    break;
+  default:
+    fprintf(stderr, "Unknown flag: %s\n", argv[1]);
+    return 1;
+  }
+  print_metrics(processes, n);
   
   return 0;
 }

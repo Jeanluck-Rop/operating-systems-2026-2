@@ -129,8 +129,17 @@ simulate_guaranteed_scheduling(Process *p,
 
 
 /* */
+void
+shortest_process_next(Process *p,
+		      int n)
+{
+  //
+}
+
+
+/* */
 int
-main(void)
+main(char* flags)
 {
   Process processes[MAX_PROCESSES];
   int n = 0;
@@ -165,8 +174,18 @@ main(void)
 	   processes[i].priority);
   }
 
-  simulate_guaranteed_scheduling(processes, n);
-  print_metrics(processes, n);
+  if (flags == "-g") {
+    simulate_guaranteed_scheduling(processes, n);
+    print_metrics(processes, n);
+  }
+  else if (flags == "-s") {
+    simulate_guaranteed_scheduling(processes, n);
+    print_metrics(processes, n);
+  }
+  else {
+    undefined;
+  }
+  
   
   return 0;
 }

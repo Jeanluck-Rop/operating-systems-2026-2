@@ -60,7 +60,7 @@ print_metrics(Process* p,
   }
 
   //Divide by n to get the mean value for each metric across all processes
-  printf("\nAverages -> Wait: %.2f | Turnaround: %.2f | Response: %.2f\n",
+  printf("\nAverages:\n Wait: %.2f | Turnaround: %.2f | Response: %.2f\n",
 	 total_waiting / n, total_turnaround / n, total_response / n);
 }
 
@@ -166,6 +166,7 @@ simulate_shortest_process_next(Process *p,
       //Conditions: It's here, it's not over, and it's the shortest one seen so far
       if(p[i].arrival <= current_time && p[i].remaining > 0){
 	if (p[i].burst < min_burst){
+	  min_burst  = p[i].burst;
 	  best_index = i;
 	}
       }

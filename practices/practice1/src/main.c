@@ -30,7 +30,7 @@ const int BIT_OFF = 2500000;
 const int DIGIT_DELAY = 6000000;
 
 /* Funcion auxiliar para dar un retraso (o delay) forzado entre las acciones de prender y apagar el LED */
-int
+void
 delay(int time)
 {
   for (volatile int i = 0; i <= time; i ++);

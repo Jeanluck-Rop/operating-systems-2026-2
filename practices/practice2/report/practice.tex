@@ -1,0 +1,86 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{listings, float}
+\usepackage{graphicx, geometry, xcolor}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{margin=3cm, top=3cm, bottom=3cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.97, 0.97, 0.97} % Gris muy suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{codeblue}{rgb}{0.0, 0.2, 0.7}      % Keywords (if, else, return)
+\definecolor{codeteal}{rgb}{0.0, 0.5, 0.5}      % Tipos de datos y Structs propios
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codeblue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeteal}\bfseries
+}
+
+\definecolor{linkblue}{HTML}{1A167A}
+
+\begin{document}
+
+\input{portada}
+
+\newpage
+
+\section*{Introducción}
+
+\subsection*{Planteamiento del Problema}
+
+\newpage
+
+\section*{Desarrollo}
+
+\subsection*{1. Fase A. }
+
+\begin{lstlisting}[style=modernc, caption={}]
+\end{lstlisting}
+
+\subsection*{1. Fase B. istema de toggle con detección de flanco y debounce en user_app.c}
+
+\section*{Diagrama de flujo del algoritmo}
+
+\newpage
+
+\section*{Evidencias}
+
+\href{https://drive.google.com/file/d/1EpT4kGI0OaF-iCf_PKcwX3u9wGwFyRQk/view?usp=drivesdk}
+     {\textbf{\textit{\textcolor{linkblue}{Evidencia Pi Pico con \#Cuenta en Binario}}}}
+
+\newpage
+
+\section*{Concluciones}
+
+\end{document}

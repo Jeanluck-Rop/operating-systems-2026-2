@@ -4,7 +4,7 @@
 \usepackage[T1]{fontenc}
 \usepackage[english]{babel}
 \usepackage{listings, float}
-\usepackage{graphicx, geometry, xcolor}
+\usepackage{graphicx, geometry, xcolor, amsmath, enumitem}
 \usepackage[normalem]{ulem}
 \usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
 
@@ -13,19 +13,19 @@
 \renewcommand{\lstlistingname}{Código}
 
 %------ Definimos los colores para la sintaxis del código --------%
-\definecolor{backcolour}{rgb}{0.97, 0.97, 0.97} % Gris muy suave para el fondo
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
 \definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
 \definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
 \definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
-\definecolor{codeblue}{rgb}{0.0, 0.2, 0.7}      % Keywords (if, else, return)
-\definecolor{codeteal}{rgb}{0.0, 0.5, 0.5}      % Tipos de datos y Structs propios
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
 
 % --- Configuración del Estilo ---
 \lstdefinestyle{modernc}{
     language=C,
     backgroundcolor=\color{backcolour},   
     commentstyle=\color{codegreen},
-    keywordstyle=\color{codeblue}\bfseries,
+    keywordstyle=\color{keywordcolor}\bfseries,
     numberstyle=\tiny\color{codegray},
     stringstyle=\color{codepurple},
     basicstyle=\ttfamily\footnotesize,
@@ -42,45 +42,538 @@
     frame=single,
     rulecolor=\color{black!20},
     frameround=tttt,
-    emph={int,char,double,float,unsigned,void,bool,struct,size_t,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
           Room, Client, pthread_mutex_t, NULL},
-    emphstyle=\color{codeteal}\bfseries
+    emphstyle=\color{codeorg}\bfseries
 }
 
 \definecolor{linkblue}{HTML}{1A167A}
 
 \begin{document}
 
-\input{portada}
+\input{cover}
 
 \newpage
 
 \section*{Introducción}
+Las llamadas al sistema (syscalls) representan el mecanismo mediante el cual un programa de usuario puede solicitar al sistema operativo que ejecute tareas u operaciones privilegiadas en beneficio del usuario y el sistema.\\
+
+\noindent
+Este mecanismo establece una barrera de protección y seguridad entre ambos: el \textbf{Modo Usuario} (\textit{no privilegiado}), donde corre la lógica de aplicación, y el \textbf{Modo Kernel} (\textit{privilegiado}), donde residen los controladores de hardware y los servicios del sistema.
+
+\noindent
+Para esta práctica, la restricción es que: el código de usuario no puede incluir bibliotecas de hardware ni utilizar apuntadores directos a registros físicos. Si el usuario desea realizar cualquier acción (presionar un botón para activar/desactivar un LED), se debe realizar una llamada al sistema, cediendo el control al procesador para que el Kernel verifique y ejecute la acción en su nombre.
 
 \subsection*{Planteamiento del Problema}
 
+El reto consiste en que, permitir que una aplicación de usuario acceda directamente a la memoria de periféricos es una vulnerabilidad crítica de seguridad en cualquier sistema operativo moderno. Un acceso directo sin validación puede:
+\begin{itemize}
+\item Corromper registros de hardware compartidos entre múltiples procesos.
+\item Habilitar ataques de escalada de privilegios.
+\item Generar fallos de hardware irreversibles al manipular pines reservados del sistema.
+\end{itemize}
+ 
+La solución es implementar una capa de abstracción mediante una \textbf{ABI} (\textit{Application Binary Interface}) definida por el estándar ARM AAPCS, usando la instrucción \texttt{SVC} como única puerta de entrada al modo privilegiado. El programa de usuario únicamente conoce identificadores numéricos de operaciones; el kernel decide si ejecutarlas o rechazarlas.
+
 \newpage
 
-\section*{Desarrollo}
+\section*{Conceptos Necesarios}
 
-\subsection*{1. Fase A. }
+\subsection*{ABI (\textit{Application Binary Interface})}
 
-\begin{lstlisting}[style=modernc, caption={}]
+Una \textbf{ABI} define las reglas de bajo nivel que deben seguir los programas para comunicarse entre sí a nivel de código máquina. A diferencia de las \textit{API}, la \textbf{ABI} especifica exactamente cómo los datos son pasados entre funciones: qué registros del procesador se usan para argumentos, cuál lleva el valor de retorno, cómo se estructura el \textit{stack}, y cómo se preservan los registros entre llamadas.\\
+
+\noindent
+Para esta práctica implementamos una \textbf{ABI} personalizada sobre el estándar \textbf{ARM AAPCS} (\textit{ARM Architecture Procedure Call Standard}) para la comunicación entre el \texttt{modo usuario} y el \texttt{modo kernel}. Las reglas que aplicamos son:
+
+\hspace{-1cm}
+\begin{table}[h]
+  \centering
+  \begin{tabular}{|c|c|c|}
+    \hline
+    \textbf{Elemento ABI} & \textbf{Registro} & \textbf{Descripción} \\
+    \hline
+    ID de Syscall & r7 & Identifica qué operación solicita el usuario \\
+    \hline
+    Argumento 1 & r0 & Primer parámetro (ej. número de pin GPIO) \\
+    \hline
+    Argumento 2 & r1 & Segundo parámetro (ej. valor del pin/btn) \\
+    \hline
+    Valor de retorno & r0 & El kernel deposita el resultado en r0 \\
+    \hline
+    Instrucción de entrada & svc \#0 & Genera la excepción de software al kernel \\
+    \hline
+  \end{tabular}
+\end{table}
+
+\subsection*{Supervisor Call (\textit{SVC})}
+
+Esta instrucción de excepción \textbf{SVC} (antes llamada \textbf{SWI} \textit{Software Interrupt}) es especial del conjunto \textbf{ARM} que genera una excepción de software de forma intencional y controlada. Es el mecanismo oficial para que el código no privilegiado transfiera el control al kernel de forma segura.\\
+
+\noindent
+Cuando se ejecuta \texttt{svc \#0}, ocurre lo siguiente de forma automática en la pico:
+
+\begin{itemize}
+\item El procesador termina la instrucción actual y entra en modo \textbf{Handler} (privilegiado).
+\item Guarda automáticamente un \textbf{Stack Frame} con 8 registros en el \textbf{Main Stack}: $r0$, $r1$, $r2$, $r3$, $r12$, $LR$, $PC$ y $xPSR$.
+\item "Salta" al vector de excepciones definido en la tabla de vectores, donde apunta el manejador \textbf{SVC} (\texttt{wrapper\_svc}).
+\item El kernel toma control total del procesador.
+\end{itemize}
+
+\noindent
+La clave de seguridad está en que el usuario no puede elegir a dónde salta el procesador: ese destino está fijo en la tabla de vectores, que solo el kernel puede modificar. Esto nos lleva a la siguiente definición.
+
+\subsection*{Main Stack Pointer (\textit{MSP})}
+
+Es el registro del procesador que apunta al tope del stack principal (su traducción literal pues). Se usa en modo \textbf{Handler} (\textit{kernel}), mientras que los procesos de usuario pueden usar el \textbf{PSP} (\textit{Process Stack Pointer}).\\
+
+\noindent
+Cuando ocurre la excepción SVC, el ARM guarda el Stack Frame en el stack activo del momento (en este caso el MSP) y el \texttt{wrapper\_svc} lee el valor del MSP con la instrucción:
+
+\begin{quote}
+  \texttt{mrs r0, MSP    @ Lee el Main Stack Pointer y lo coloca en r0}
+\end{quote}
+
+\noindent
+Este apuntador es sumamete necesario porque apunta exactamente al inicio del Stack Frame guardado por el hardware, el kernel en C recibe ese apuntador como \texttt{svc\_args[]} y puede así leer los registros $r0$-$r3$ del usuario (que son los argumentos de la syscall) y escribir de vuelta en $r0$ para retornar un valor.\\
+
+Esto debido a que, cuando ARM guarda el Stack Frame, lo hace en este orden exacto en memoria:
+
+\begin{align*}
+  \texttt{[SP + 0] } &\texttt{=} \texttt{ r0} \leftarrow \texttt{svc\_args[0]} \quad \text{(primer argumento / valor de retorno)}\\
+  \texttt{[SP + 4] } &\texttt{=} \texttt{ r1}   \leftarrow \texttt{svc\_args[1]} \quad\text{(segundo argumento)}\\
+  \texttt{[SP + 8] } &\texttt{=} \texttt{ r2}   \leftarrow \texttt{svc\_args[2]}\\
+  \texttt{[SP + 12]} &\texttt{=} \texttt{ r3}   \leftarrow \texttt{svc\_args[3]}\\
+  \texttt{[SP + 16]} &\texttt{=} \texttt{ r12}\\
+  \texttt{[SP + 20]} &\texttt{=} \texttt{ LR}\\
+  \texttt{[SP + 24]} &\texttt{=} \texttt{ PC} \qquad\text{(dirección de retorno)}\\
+  \texttt{[SP + 28]} &\texttt{=} \texttt{ xPSR}
+\end{align*}
+
+Escribir en \texttt{svc\_args[0]} es literalmente escribir en r0 del usuario, por eso el kernel puede "retornar" un valor al usuario sin ninguna instrucción especial.
+
+\section*{Arquitectura del Sistema}
+
+Recordemos que tenemos dos modos:\\
+
+\textbf{Modo USUARIO (No Privilegiada)}
+\begin{itemize}
+\item \texttt{syscalls.S}: Biblioteca \textbf{ABI} QUE oculta el ensamblador tras funciones C.
+\item \texttt{user\_app.c}: La lógica de aplicación, solo usa syscalls nunca hardware directo.
+\end{itemize}
+
+\textbf{Modo Kernel (Privilegiada)}
+\begin{itemize}
+\item \texttt{main.c}: Configura la tabla de vectores y lanza la aplicación de usuario.
+\item \texttt{svc\_handler.S}: \textbf{Wrapper} \textbf{ASM} extrae el MSP y al $r7$ y llama a \texttt{kernel\_service()}.
+\item \texttt{kernel\_service.c}: El dispatcher, valida el ID y decide qué driver invocar.
+\item \texttt{kernel\_drivers.c}: Único archivo con acceso a \texttt{0xD0000000} (\texttt{SIO}/\texttt{GPIO RP2040}).
+\end{itemize}
+
+\subsection*{Flujo completo de una syscall}
+
+\begin{enumerate}[label=Paso \arabic*.]
+\item El Usuario llama a una función C (\texttt{user\_app.c}).
+  
+  El código de la aplicación de usuario invoca una función de la biblioteca de syscalls como si fuera una función C ordinaria. No tiene idea de que internamente hay ensamblador ni registros ARM.
+  
+  \begin{quote}
+    \texttt{// En user\_app.c}
+    \texttt{sys\_gpio\_set(LED\_PIN, LED\_STATE);}
+  \end{quote}
+  
+\item El Ensamblador prepara la \textbf{ABI} (\texttt{syscalls.S})
+  
+  La función \texttt{sys\_gpio\_set} no es C, es una función escrita en ensamblador ARM Thumb, su único trabajo es cargar el ID de syscall en $r7$ y luego ejecutar \texttt{svc \#0}.
+  
+  \begin{quote}
+    \texttt{@ syscalls.S}
+    \texttt{sys\_gpio\_set:}
+    \texttt{    @ r0 ya tiene el pin (13) colocado por el compilador C}
+    \texttt{    @ r1 ya tiene el valor (1) colocado de nuevo por el compilador C}
+    
+    \texttt{    mov r12, r7   @ Preservamos el r7 del usuario en r12 (caller-saved)}
+    \texttt{    movs r7, \#1  @ Carga el ID de syscall: SYS\_GPIO\_SET = 1}
+    \texttt{    svc \#0       @ EXCEPCION DE SOFTWARE — transfiere control al kernel}
+    \texttt{    mov r7, r12   @ Restaura r7 al valor original del usuario}
+    \texttt{    bx lr         @ Regresamos al código usuario}
+  \end{quote}
+  
+  La instrucción \texttt{mov r12, r7} es necesaria porque $r7$ podría tener un valor importante del contexto del usuario. Al guardarlo en $r12$ y restaurarlo después del \texttt{svc}, la función respeta la convención \textbf{ABI} sin tocar el stack del usuario.
+  
+\item El Hardware ARM guarda el Stack Frame automáticamente
+  
+  Al ejecutar \texttt{svc \#0}:
+  \begin{itemize}
+  \item Detecta la excepción SVC.
+  \item Guarda en el stacklos 8 registros del estado actual del usuario: r0, r1, r2, r3, r12, LR, PC, xPSR.
+  \item Cambia al modo Handler (modo privilegiado).
+  \item Salta al vector de excepción SVC, donde está registrado \texttt{wrapper\_svc}.
+  \end{itemize}
+  
+\item El Wrapper ASM extrae los argumentos (\texttt{svc\_handler.S})
+
+  El manejador de excepción en ensamblador recibe el control del procesador, su función es extraer los dos datos que \texttt{kernel\_service()} necesita y hacer el puente hacia C:
+
+  \begin{quote}
+    \texttt{@ syscalls.S}
+    \texttt{wrapper\_svc:}
+    \texttt{    mrs r0, MSP          @ Lee el Main Stack Pointer}
+    \texttt{                         @ r0 ahora apunta al inicio del Stack Frame}
+    \texttt{                         @ Este sera el argumento svc\_args[] en C}
+    
+    \texttt{    mov r1, r7           @ r7 contiene el ID de syscall que pusimos en el Paso 2}
+    \texttt{                         @ Este sera el argumento syscall\_id en C}
+    
+    \texttt{    push {r4, lr}        @ Preservamos lr para poder retornar correctamente}
+    \texttt{    bl kernel\_service   @ Se llama a la funcion C del kernel}
+    \texttt     {pop {r4, pc}        @ Restauramos y regresamos al modo usuario}
+  \end{quote}
+  
+  La instrucción \texttt{mrs} (\textit{Move from Special Register}) es necesaria porque el \textbf{MSP} es un registro especial del sistema y no se puede leer directamente como $r0$ o $r12$, solo el modo privilegiado puede acceder a ella, lo que refuerza la seguridad del sistema.
+  
+\item El Dispatcher valida y enruta (\texttt{kernel\_service.c})
+  
+  La función \texttt{kernel\_service()} recibe el apuntador al \textit{stack frame} (\textit{svc\_args}) y el ID de la syscall. Usando un switch determinamos qué operación ejecutar y la validamos antes de ejecutar:
+  
+  \begin{lstlisting}[style=modernc]
+      void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
+        switch (syscall_id) {
+          case SYS_GPIO_SET:
+          // Set the GPIO value using the kernel function
+          k_gpio_set(svc_args[0], svc_args[1]);
+          break;
+          
+          case SYS_GPIO_GET:
+          //Read the pin state via the hardware driver and write the result back into svc_args[0]
+          //Because svc_args points to r0 on the user stack,
+          //   this is equivalent to returning the value directly into r0
+          svc_args[0] = (uint32_t)k_gpio_get(svc_args[0]);
+          break;
+          
+          case SYS_GPIO_DIR:
+          // Validate before executing.
+          // Example: Prohibit touching pins 0 and 1 (UART) or pins > 28 (System)
+          int pin = svc_args[0];
+          if (pin < 2 || pin > 28) {
+            svc_args[0] = -1; // Error: Permission denied (EACCES)
+          } else {
+            //Pin is within the safe range
+            //Initialize direction via the driver and return 0 as signal success back to user space through r0
+            k_gpio_init(svc_args[0], svc_args[1]);
+            svc_args[0] = 0; //success
+          }
+          break;
+          
+          default:
+          // Invalid syscall ID, return an error code (e.g., -1)
+          svc_args[0] = -1; 
+          break;
+        }
+      }
+  \end{lstlisting}
+  
+  La línea \texttt{svc\_args[0] = resultado} es la forma en que el kernel retorna un valor al usuario. Como \texttt{svc\_args[0]} apunta exactamente a donde está $r0$ guardado en el stack, al modificarlo el procesador restaurará ese valor en $r0$ cuando regrese al modo usuario.
+
+\item El Driver manipula el hardware (\texttt{kernel\_drivers.c})
+  
+  Este archivo es el único archivo del sistema con acceso directo a los registros físicos del RP2040 en \texttt{0xD0000000}. Usa apuntadores volátiles para acceder a los registros mapeados en memoria:
+  
+  \begin{lstlisting}[style=modernc]
+    void k_gpio_set(uint32_t pin, uint32_t value)
+      {
+        //Writing a bitmask of (1 << pin) to SET drives the pin high,
+        //  writing the same mask to CLR drives it low
+        //This avoids race conditions if an interrupt fires between the read and the write
+        if (value)
+        *(volatile uint32_t *)SIO_GPIO_OUT_SET = (1 << pin);
+        else
+        *(volatile uint32_t *)SIO_GPIO_OUT_CLR = (1 << pin);
+      }
+      
+      int k_gpio_get(uint32_t pin)
+      {
+        //SIO_GPIO_IN holds the live state of all 30 GPIO pins simultaneously, one bit per pin
+        //A volatile pointer forces the compiler to re-read the register
+        //  on every access instead of caching a stale value
+        volatile uint32_t *GPIO_INPUT_STATE = (volatile uint32_t *)SIO_GPIO_IN;
+        
+        //Shift the register right by 'pin' positions to move the target bit
+        //  into bit 0, then mask with 1 to discard all other pins
+        //Ex: pin = 2, register = 0b...100 -> >> 2 -> 0b...1 -> & 1 -> 1
+        return (int)((*GPIO_INPUT_STATE >> pin) & 1);
+      }
+  \end{lstlisting}
+  
+\item El Retorno al Modo Usuario.
+  
+  Una vez que \texttt{kernel\_service()} termina, el control regresa a \texttt{wrapper\_svc} (con pop \{$r4$, $pc$\}), y el procesador ARM restaura automáticamente desde el stack los registros $r0$, $r1$, $r2$, $r3$, $r12$, $LR$, $PC$ y $xPSR$. La ejecución continúa exactamente en la instrucción siguiente al \texttt{svc \#0} en \texttt{syscalls.S}:
+  
+  \begin{quote}
+    \texttt{svc \#0      @ aqui entramos al kernel}
+    \texttt{mov r7, r12  @ continuamos al volver, r0 ya tiene el resultado}
+    \texttt{bx lr        @ regresamos a user\_app.c}
+  \end{quote}
+  
+\end{enumerate}
+
+\section*{Aplicación de Usuario}
+
+\subsection*{Fase A: Puente Directo Botón $\rightarrow$ LED}
+
+En la Fase A el objetivo es simple, el LED simplemente refleja el estado del botón en tiempo real. No hay memoria de estado; el LED solo sigue al botón. Se usa \texttt{BTN\_STATE} porque el LED funciona como un espejo instantáneo del botón.
+
+\subsection*{Fase B}
+
+Sin embargo, a Fase B implementa un comportamiento más sofisticado: el LED actúa como un interruptor de memoria. Cada pulsación cambia su estado, independientemente de cuánto tiempo se mantenga presionado el botón, por ello gaurdamos \texttt{LED\_STATE}, donde indicamos si debe estar encendido o apagado y esa memoria solo cambia en el momento exacto del flanco.
+
+\begin{itemize}
+\item \textbf{Detección de Flanco de Bajada.} Un flanco de bajada (\textit{falling edge}) es el instante exacto en que una señal pasa de nivel alto (1) a nivel bajo (0). Para el botón con pull-up, esto ocurre justo cuando se presiona. Detectar el flanco en lugar del nivel permite que el toggle ocurra una sola vez por pulsación.
+  
+\item \textbf{Software Debounce.} Los botones mecánicos tienen contactos metálicos que literalmente rebotan al juntarse, produciendo múltiples transiciones 0 y 1 en los primeros 5 o 20 milisegundos. Sin debounce, cada presión física podría detectarse múltiples flancos.
+\end{itemize}
+
+\newpage
+
+\section*{Códigos completos}
+
+\begin{lstlisting}[style=modernc, caption={user\_app.c}]
+#include <stdint.h>
+#include "syscalls.h"
+
+/* GPIO LED pin definition */
+#define LED_PIN 13
+/* GPIO Button pin definition */
+#define BTN_PIN 2
+
+/* Auxiliary function that performs a busy-wait delay  */
+void
+sys_delay(uint32_t time) {
+  for (volatile uint32_t i = 0; i <= time; i ++);
+}
+
+int user_app_entry(void) {
+  // Setup Phase (Unprivileged): The user program configures its resources using syscalls.
+  
+  //Configure LED_PIN as output (1) and BTN_PIN as input (0)
+  //Neither call touches hardware directly, both go through the
+  //  svc mechanism so the kernel can validate and execute them
+  sys_gpio_dir(LED_PIN, 1);
+  sys_gpio_dir(BTN_PIN, 0);
+  int LED_STATE = 0; //track the current state of the LED
+  int BTN_STATE = 0; //hold the current button reading from the syscall
+
+  //hold the previous button state
+  //Initialized to 1, because the pull-up resistor holds the pin high at rest
+  int P_BTN_STATE = 1;
+  
+  while (1) {
+    // Operational Phase (Unprivileged): The user program performs its main functionality.
+
+    //Read the current button state via syscall.
+    //Kernel reads the SIO_GPIO_IN register and returns the corresponding bit
+    BTN_STATE = sys_gpio_get(BTN_PIN);
+
+    //Falling edge detection:
+    //  the button was released (1) last iteration and is now pressed (0) this iteration
+    //This fires exactly once per physical press, not continuously while held down
+    if (P_BTN_STATE == 1 && BTN_STATE == 0) {
+
+      //Software debounce: wait and re-read the pin
+      //Mechanical buttons bounce between 0 and 1 for a few milliseconds after being pressed
+      //If the pin is still 0/1 after the delay, the press is genuine and not electrical noise
+      sys_delay(500000);
+      if (sys_gpio_get(BTN_PIN) == 0) {
+
+        //Toggle the LED state and apply it via syscall
+        //Due to FASE B: LED_STATE is used instead of BTN_STATE because
+        //  the LED must remember its own state independently of the button position
+        LED_STATE = !LED_STATE;
+	sys_gpio_set(LED_PIN, LED_STATE);
+      }
+    }
+    
+    //Store the current reading as the previous state for the next iteration
+    //This is what makes falling edge detection possible on the next cycle
+    P_BTN_STATE = BTN_STATE;
+  }
+  
+  // Should never reach here
+  return 0;
+}
 \end{lstlisting}
 
-\subsection*{1. Fase B. istema de toggle con detección de flanco y debounce en user_app.c}
+\newpage
 
-\section*{Diagrama de flujo del algoritmo}
+\begin{lstlisting}[style=modernc, caption={kernel\_service.c}]
+/*
+ * @brief Kernel service handler for system calls.
+ * @param svc_args: Pointer to the user stack frame.
+ * @param syscall_id: The value of r7 passed by the assembler
+ */
+void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
+  switch (syscall_id) {
+  case SYS_GPIO_SET:
+    // Set the GPIO value using the kernel function
+    k_gpio_set(svc_args[0], svc_args[1]);
+    break;
+    
+  case SYS_GPIO_GET:
+
+    //Read the pin state via the hardware driver and write the result back into svc_args[0]
+    //Because svc_args points to r0 on the user stack,
+    //   this is equivalent to returning the value directly into r0
+    svc_args[0] = (uint32_t)k_gpio_get(svc_args[0]);
+    break;
+    
+  case SYS_GPIO_DIR:
+    // Validate before executing.
+    // Example: Prohibit touching pins 0 and 1 (UART) or pins > 28 (System)
+    int pin = svc_args[0];
+    if (pin < 2 || pin > 28) {
+      svc_args[0] = -1; // Error: Permission denied (EACCES)
+    } else {
+      //Pin is within the safe range
+      //Initialize direction via the driver and return 0 as signal success back to user space through r0
+      k_gpio_init(svc_args[0], svc_args[1]);
+      svc_args[0] = 0; //success
+    }
+    break;
+    
+  default:
+    // Invalid syscall ID, return an error code (e.g., -1)
+    svc_args[0] = -1; 
+    break;
+  }
+}
+\end{lstlisting}
+
+\newpage
+
+\begin{lstlisting}[style=modernc, caption={kernel\_drivers.c}]
+//Pad control registers set electrical properties of each GPIO pin
+//  such as drive strength, slew rate, and pull-up/pull-down resistors
+  
+//Base address of the PADS_BANK0 peripheral on the RP2040.
+#define PADS_BANK0_BASE 0x4001C000
+
+//Computes the address of the pad control register for a given pin
+#define PADS_BANK0_GPIO(pin) (PADS_BANK0_BASE + 0x004 + (pin) * 4) //this
+
+//Pull-Up Enable, setting this bit connects an internal resistor between the pin
+//  and 3.3V, ensuring the pin reads 1 (high) when nothing is driving it
+#define PADS_PUE (1 << 3)
+
+//Pull-Down Enable
+#define PADS_PDE (1 << 2)
+
+/**
+ * @brief Initialize GPIO pin as input or output and set function to SIO (func 5)
+ * @param pin GPIO pin number
+ * @param output 1 for output, 0 for input
+ */
+void k_gpio_init(uint32_t pin, uint32_t output)
+{
+  /* Select SIO function (func 5) for the pin */
+  volatile uint32_t *gpio_ctrl = (volatile uint32_t *)IO_BANK0_GPIO_CTRL(pin);
+  *gpio_ctrl = (*gpio_ctrl & ~0x1F) | GPIO_FUNC_SIO;
+
+  /* Configure direction (output/input) */
+  if (output)
+    *(volatile uint32_t *)SIO_GPIO_OE_SET = (1 << pin);
+  else {
+    *(volatile uint32_t *)SIO_GPIO_OE_CLR = (1 << pin);
+
+    //Get a pointer to this pin's pad control register
+    volatile uint32_t *pad = (volatile uint32_t *)PADS_BANK0_GPIO(pin);
+
+    //Enable the internal pull-up and explicitly disable the pull-down (PDE=0)
+    //Both bits must be set correctly, because activating pull-up alone while pull-down remains
+    //  enabled causes them to conflict, leaving the pin in an indeterminate floating state
+    *pad = (*pad | PADS_PUE) & ~PADS_PDE;
+  }
+}
+
+/**
+ * @brief Set GPIO pin output value
+ * @param pin GPIO pin number
+ * @param value 1 for high, 0 for low
+ */
+void k_gpio_set(uint32_t pin, uint32_t value)
+{
+  //Writing a bitmask of (1 << pin) to SET drives the pin high,
+  //  writing the same mask to CLR drives it low
+  //This avoids race conditions if an interrupt fires between the read and the write
+  if (value)
+    *(volatile uint32_t *)SIO_GPIO_OUT_SET = (1 << pin);
+  else
+    *(volatile uint32_t *)SIO_GPIO_OUT_CLR = (1 << pin);
+}
+
+/**
+ * @brief Get GPIO pin input value
+ * @param pin GPIO pin number
+ * @return 1 if high, 0 if low
+ */
+int k_gpio_get(uint32_t pin)
+{
+  //SIO_GPIO_IN holds the live state of all 30 GPIO pins simultaneously, one bit per pin
+  //A volatile pointer forces the compiler to re-read the register
+  //  on every access instead of caching a stale value
+  volatile uint32_t *GPIO_INPUT_STATE = (volatile uint32_t *)SIO_GPIO_IN;
+
+  //Shift the register right by 'pin' positions to move the target bit
+  //  into bit 0, then mask with 1 to discard all other pins
+  //Ex: pin = 2, register = 0b...100 -> >> 2 -> 0b...1 -> & 1 -> 1
+  return (int)((*GPIO_INPUT_STATE >> pin) & 1);
+}
+\end{lstlisting}
+
+\newpage
+
+\section*{Diagrama de flujo del programa}
+
+Tenemos un diagrama general que da la idea principal de como funciona la práctica:
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.9\textheight,keepaspectratio]{diagrama_u.png}
+\end{center}
+
+\newpage
+
+Además tenemos el diagrama más detallado del flujo de la llamada al sistema y como lo maneja el modo kernel:
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.9\textheight,keepaspectratio]{diagrama_k.png}
+\end{center}
 
 \newpage
 
 \section*{Evidencias}
 
-\href{https://drive.google.com/file/d/1EpT4kGI0OaF-iCf_PKcwX3u9wGwFyRQk/view?usp=drivesdk}
-     {\textbf{\textit{\textcolor{linkblue}{Evidencia Pi Pico con \#Cuenta en Binario}}}}
+\href{https://drive.google.com/file/d/1MPHJzLbSBT-1D8AjcMMMfZm1qzQpaToD/view?usp=drivesdk}
+     {\textbf{\textit{\textcolor{linkblue}{Evidencia Práctica 2 Video}}}}
 
-\newpage
 
 \section*{Concluciones}
+
+En esta práctica mostramos con código y la placa Raspberry PiPico un diseño muy primitivo pero eficiente en la seguridad de sistemas operativos modernos:
+ 
+\begin{itemize}
+\item \textbf{Aislamiento de Privilegios:} La aplicación de usuario nunca accede directamente a \texttt{0xD0000000} ni a ningún registro de hardware. La barrera es absoluta y está reforzada por la arquitectura ARM: el modo usuario simplemente no puede ejecutar las instrucciones \texttt{mrs MSP} ni acceder a los registros de control del procesador.
+ 
+\item \textbf{Diseño de una ABI funcional:} El código de usuario la usa de forma transparente: llama funciones C que internamente tienen ensamblador invisible.
+ 
+\item \textbf{Gestión de Hardware Segura:} El kernel rechaza activamente peticiones inválidas. El dispatcher centralizado garantiza que ningún driver se ejecute sin pasar por validación.
+ 
+\item \textbf{Detección de Flanco vs. Nivel:} La condición P = 1, C = 0 implementa un detector de flanco de bajada en software con un bajo costo computacional.
+ 
+\item \textbf{Debounce por Confirmación:} El patrón de esperar y re-confirmar es más robusto que simplemente esperar un retardo fijo, porque elimina tanto el ruido del flanco inicial como el riesgo de que un retardo insuficiente no cubra todos los rebotes.
+ 
+\item \textbf{El Bug del Pull-Up/Pull-Down:} La necesidad de desactivar \texttt{PADS\_PDE} al activar \texttt{PADS\_PUE} es un ejemplo de cómo el hardware tiene estados por defecto que pueden no ser los que se espera al programarlos. Por lo que leer el datasheet y entender el valor inicial de cada registro es claramente indispensable en programación de sistemas embebidos.
+ 
+  El sistema implementado es, en cierto modo (de manera muy reducida), equivalente al mecanismo de syscalls de Linux en arquitectura \textbf{ARM}: misma instrucción (\texttt{svc}), mismo registro de ID ($r7$), mismo mecanismo de paso de argumentos ($r0$-$r3$), mismo método de retorno ($r0$); pero en una escala menor, solo para enceder/apagar un LED mediante un botón.
+
+\end{itemize}
 
 \end{document}

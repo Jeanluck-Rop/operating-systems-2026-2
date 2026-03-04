@@ -84,41 +84,34 @@ SPN se basa en dar máxima prioridad al proceso con la estimación de burst más
 ID | Arrival | Burst | Start | Finish | Wait | Turnaround | Response
 ----------------------------------------------------------------------
  1 |       0 |     2 |     0 |      2 |    0 |          2 |        0
- 2 |       2 |     4 |     2 |     30 |   24 |         28 |        0
- 3 |       4 |     6 |     4 |    362 |  352 |        358 |        0
- 4 |       6 |     8 |     6 |    477 |  463 |        471 |        0
- 5 |       8 |    10 |     8 |    552 |  534 |        544 |        0
- 6 |      10 |     2 |    10 |     16 |    4 |          6 |        0
- 7 |      12 |     4 |    12 |    205 |  189 |        193 |        0
- 8 |      14 |     6 |    14 |    372 |  352 |        358 |        0
+ 2 |       2 |     4 |     2 |      6 |    0 |          4 |        0
+ 3 |       4 |     6 |     6 |     12 |    2 |          8 |        2
+ 4 |       6 |     8 |   240 |    248 |  234 |        242 |      234
+ 5 |       8 |    10 |   400 |    410 |  392 |        402 |      392
+ 6 |      10 |     2 |    12 |     14 |    2 |          4 |        2
+ 7 |      12 |     4 |    14 |     18 |    2 |          6 |        2
+ 8 |      14 |     6 |    18 |     24 |    4 |         10 |        4
 ...
-94 |     186 |     8 |   186 |    577 |  383 |        391 |        0
-95 |     188 |    10 |   188 |    599 |  401 |        411 |        0
-96 |     190 |     2 |   190 |    263 |   71 |         73 |        0
-97 |     192 |     4 |   192 |    408 |  212 |        216 |        0
-98 |     194 |     6 |   194 |    516 |  316 |        322 |        0
-99 |     196 |     8 |   196 |    581 |  377 |        385 |        0
-100 |     198 |    10 |   198 |    600 |  392 |        402 |        0
+94 |     186 |     8 |   384 |    392 |  198 |        206 |      198
+95 |     188 |    10 |   580 |    590 |  392 |        402 |      392
+96 |     190 |     2 |   192 |    194 |    2 |          4 |        2
+97 |     192 |     4 |   194 |    198 |    2 |          6 |        2
+98 |     194 |     6 |   234 |    240 |   40 |         46 |       40
+99 |     196 |     8 |   392 |    400 |  196 |        204 |      196
+100 |     198 |    10 |   590 |    600 |  392 |        402 |      392
 
 Averages:
- Wait: 294.70 | Turnaround: 300.70 | Response: 0.00
+ Wait: 129.78 | Turnaround: 135.78 | Response: 129.78
 ```
 A diferencia de GS, aquí `Response == Wait` para todos los procesos. Esto ocurre porque SPN no es preemptivo: la primera vez que un proceso recibe CPU es también la única vez que empieza a correr sin parar hasta terminar, entonces el tiempo que esperó antes de arrancar es exactamente igual al tiempo que estuvo sin CPU. En GS un proceso podía recibir CPU en partes, pero en SPN el primer tick de CPU ya es el inicio de la ejecución completa.
 
-El alto **Response Time** promedio de 178.50 contrasta directamente con el 0.00 de GS y refleja la naturaleza no preemptiva: los procesos deben esperar en cola a que el proceso actual termine su burst entero antes de poder arrancar.
+El alto **Response Time** promedio de 178.50 contrasta directamente con el 0.00 de GS y refleja la naturaleza no preemptiva: los procesos deben esperar en cola a que el proceso actual termine su burst entero antes de poder arrancar. El efecto más claro se ve comparando los procesos 3, 6 y 7 contra el proceso 4:
 
 ```
 3 |       4 |     6 |     6 |     12 |    2 |          8 |        2
 6 |      10 |     2 |    12 |     14 |    2 |          4 |        2
 7 |      12 |     4 |    14 |     18 |    2 |          6 |        2
-4 |       6 |     8 |   240 |    248 |  234 |        242 |      234
-```
-El efecto más claro se ve comparando los procesos 3, 6 y 7 contra el proceso 4:
 
-```
-3 |       4 |     6 |     6 |     12 |    2 |          8 |        2
-6 |      10 |     2 |    12 |     14 |    2 |          4 |        2
-7 |      12 |     4 |    14 |     18 |    2 |          6 |        2
 4 |       6 |     8 |   240 |    248 |  234 |        242 |      234
 ```
 
@@ -126,6 +119,20 @@ En `t=6` cuando la CPU queda libre, los procesos 3 (`burst=6`) y 4 (`burst=8`) e
 
 El mismo patrón explica los procesos 5 y 10 con `burst=10`, que acumulan exactamente 392 ticks de espera cada uno, el máximo del sistema, siendo siempre los últimos elegidos en cada ronda de decisiones.
 
+
+## Interfaz y Gráficas comparativas
+
+![Visualización de resultados con Guaranteed Scheduling](img1.png)
+
+En la imagen se puede presenciar como cada proceso recibe un "cuadrito" (tick) que representa la CPU recibida, de acorde a la funcionalidad del proceso, el cual se ocupa de dar un poco de CPU a cada proceso.
+
+![Visualización de resultados con Shortes Process Next](img2.png)
+
+En esta imagen en cambio se aprecia como reciben varios ticks de CPU seguidos, siguiendo la lógica del proceso, el cuál otorga toda la CPU a los procesos más cortos para que terminen su labor.
+
+![Gráficas con resultados comparativos de ambos procesos](img3.png)
+
+Aquí simplemente se visualiza con gráfica el promedio de ambos procesos
 
 ### Conclusión
 

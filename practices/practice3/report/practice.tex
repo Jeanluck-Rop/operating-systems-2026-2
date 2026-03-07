@@ -1,0 +1,754 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{listings, float}
+\usepackage{graphicx, geometry, xcolor, amsmath, enumitem}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{margin=3cm, top=3cm, bottom=3cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeorg}\bfseries
+}
+
+\definecolor{linkblue}{HTML}{1A167A}
+
+\begin{document}
+
+\input{cover}
+
+\newpage
+
+\section*{Introducción}
+
+Una vez implementada la diferenciación entre Modo Kernel y Modo Usuario para el manejo del hardware, contamos con la base funcional de los sistemas operativos modernos. El siguiente paso es agregar otra capacidad fundamental: la programación multitarea con cambios de contexto.\\
+
+\noindent
+Para lograrlo será necesario comprender a fondo la \textit{Gestión de Memoria y Pilas}, específicamente el funcionamiento del \textbf{Process Stack Pointer} (PSP) y la estructura del \textbf{Stack Frame}. Igualmente, deberemos analizar el \textit{Manejo de Excepciones del Sistema}, en particular el rol de la excepción \texttt{PendSV}, que permite diferir los cambios de contexto de forma segura sin bloquear el sistema.
+
+\subsection*{Planteamiento del Problema}
+
+Debemos diseñar e implementar un \textit{Conmutador de Contexto} construido en ensamblador y C, capaz de alternar la ejecución entre múltiples tareas guardando y restaurando su estado interno sin pérdida de datos. El sistema debe dar la ilusión de ejecutar varios procesos simultáneamente, retomando cada tarea exactamente en el punto donde fue suspendida.\\
+
+\noindent
+En esta práctica se evoluciona el Kernel existente para sostener la ejecución de tres procesos independientes, que se alternan mediante el botón físico conectado a interrupciones de hardware y que se verán reflejadas a través de cinco LEDs conectado a la placa.
+
+\newpage
+
+\section*{Desarrollo}
+
+\subsection*{Mecanismo Cambio de Contexto}
+
+El flujo que ocurre al presionar el botón es el siguiente:
+\begin{enumerate}
+\item \textbf{Interrupción Física:} El usuario presiona el botón, disparando la rutina \texttt{IO\_IRQ\_BANK0\_Handler}. Esta limpia el flag de interrupción y escribe el bit \texttt{PENDSVSET} en \texttt{SCB\_ICSR}.
+
+\item \textbf{Solicitud de PendSV:} Para no bloquear el sistema con trabajo pesado dentro de un \texttt{IRQ} de hardware, el handler delega el cambio de contexto a la excepción \texttt{PendSV}. Esta tiene la prioridad más baja, así que se dispara al salir del \texttt{IRQ} del botón.
+
+\item \textbf{Guardado (Save):} \texttt{PendSV\_Handler} deshabilita interrupciones (\texttt{cpsid i}), lee el \textbf{PSP} con \texttt{mrs r0, psp} y guarda manualmente los registros $r4$ - $r11$ en la pila de la tarea actual (el Software Frame). El procesador ya guardó $r0$ - $r3$, $r12$, $lr$, $pc$ y $xPSR$ automáticamente (el Hardware Frame).
+
+\item \textbf{Cambio de ID:} Se lee \texttt{current\_task\_id}, se actualiza el apuntador de pila de la tarea actual (\texttt{sp\_taskN} con \texttt{N} $\in$ \{1, 2, 3\}) y se calcula el ID de la próxima tarea en \textit{Round - Robin}: 0 $\rightarrow$ 1 $\rightarrow$ 2 $\rightarrow$ 0.
+
+\item \textbf{Restauración (Load):} Se carga el \textbf{PSP} guardado de la nueva tarea, se restauran $r4$ - $r11$ y se actualiza el \textbf{PSP}. Al retornar con \texttt{bx 0xFFFFFFFD} el procesador desapila automáticamente el \textit{Hardware Frame} y la nueva tarea retoma su ejecución.
+\end{enumerate}
+
+\subsection*{Diagrama del Stack Frame}
+
+En las siguientes tablas se muestra la estructura completa de la pila de cada tarea durante un cambio de contexto. 
+
+\bigskip
+
+\textbf{Software Frame.} Guardado manualmente en \texttt{pendsv.s}
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{PSP Offset} & \textbf{Registro} & \textbf{Descripción} \\ \hline
+\texttt{PSP + 0x00} & \texttt{r4}  & Guardado con: \texttt{subs r0,\#32 + stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x04} & \texttt{r5}  & \texttt{stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x08} & \texttt{r6}  & \texttt{stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x0C} & \texttt{r7}  & \texttt{stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x10} & \texttt{r8}  & \texttt{mov r4,r8 + stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x14} & \texttt{r9}  & \texttt{mov r5,r9 + stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x18} & \texttt{r10} & \texttt{mov r6,r10 + stmia r0!,\{r4-r7\}} \\ \hline
+\texttt{PSP + 0x1C} & \texttt{r11} & \texttt{mov r7,r11 + stmia r0!,\{r4-r7\}} \\ \hline
+\end{tabular}
+\end{table}
+
+\newpage
+
+\textbf{Hardware Frame.} Guardado automáticamente por el procesador al entrar la excepción
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{PSP Offset} & \textbf{Registro} & \textbf{Descripción} \\ \hline
+\texttt{PSP + 0x20} & \texttt{r0}  & Guardado automáticamente al detectar la excepción \\ \hline
+\texttt{PSP + 0x24} & \texttt{r1}  & Guardado automáticamente \\ \hline
+\texttt{PSP + 0x28} & \texttt{r2}  & Guardado automáticamente \\ \hline
+\texttt{PSP + 0x2C} & \texttt{r3}  & Guardado automáticamente \\ \hline
+\texttt{PSP + 0x30} & \texttt{r12} & Guardado automáticamente \\ \hline
+\texttt{PSP + 0x34} & \texttt{lr}  & Dirección de retorno de la tarea \\ \hline
+\texttt{PSP + 0x38} & \texttt{pc}  & Siguiente instrucción a ejecutar \\ \hline
+\texttt{PSP + 0x3C} & \texttt{xpsr} & Flags de estado + Thumb bit \\ \hline
+\end{tabular}
+\end{table}
+
+Cabe mencionar que para $xPSR$, las flags de estado, son bits dentro de este registro que el procesador actualiza automáticamente después de operaciones aritméticas/lógicas. Los usa para tomar decisiones en saltos condicionales.\\
+
+\noindent
+Mientras que \textbf{Thumb bit}, \texttt{Cortex-M0+} solo ejecuta estas instrucciones \textbf{Thumb} (\textit{16/32} bits), nunca \textbf{ARM} clásico (32 bits). El bit T en \texttt{xPSR} indica al procesador en qué modo está:
+
+\begin{itemize}
+\item T = 1: modo \textbf{Thumb} $\rightarrow$ normal, todo funciona
+\item T = 0: modo \textbf{ARM} $\rightarrow$ en \texttt{M0+} causa un \textit{HardFault} inmediato
+\end{itemize}
+
+\noindent
+Por eso en \texttt{task\_init\_stack} inicializamos $xPSR$ con \texttt{0x01000000}, este es exactamente el bit 24 (T) en 1, si pusiera \texttt{0x00000000} el procesador intentaría ejecutar modo \textbf{ARM} al iniciar la tarea y se rompería instantáneamente.
+
+\subsection*{Tabla de Flujo Round-Robin}
+En el scheduler implementamos un \textit{Round-Robin} cooperativo activado por botón. La siguiente tabla resume las tres transiciones posibles:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+\textbf{Tarea activa} & \textbf{Botón} & \textbf{Guarda en} & \textbf{next ID} & \textbf{Carga de} & \textbf{Resultado} \\
+\hline
+\textbf{Tarea 0} (\texttt{ID} = 0) & Presionado & \texttt{sp\_task1} & \texttt{ID} $\rightarrow$ 1 & \texttt{sp\_task2} & \textbf{Tarea 1} \\
+\hline
+\textbf{Tarea 1} (\texttt{ID} = 1) & Presionado & \texttt{sp\_task2} & \texttt{ID} $\rightarrow$ 2 & \texttt{sp\_task3} & \textbf{Tarea 2} \\
+\hline
+\textbf{Tarea 2} (\texttt{ID} = 2) & Presionado & \texttt{sp\_task3} & \texttt{ID} $\rightarrow$ 0 & \texttt{sp\_task1} & \textbf{Tarea 0} \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection*{Implementación Tercera Tarea}
+
+Para soportar tres tareas simultáneas se modificaron tres archivos \texttt{main.c}, \texttt{pendsv.s} y \texttt{user\_app.c}. Cabe mencionar que, la implementación interesante está en el archivo \texttt{pendsv.s}, puesto que en \texttt{main.c} solo agreagamos la instrucción de la nueva tarea y la inicializamos; mientras que en \texttt{user\_app.c} definimos el comportamiento de esa tercer tarea:\\
+
+\texttt{main.c} \textbf{Declaración de memoria y apuntador}
+
+\noindent
+Se agregaron la pila y el apuntador de la tercera tarea (\texttt{task\_lullaby}), con alineación obligatoria a 8 bytes según la \textbf{AAPCS} (\textit{ARM Application Binary Interface}):
+
+\begin{lstlisting}[style=modernc, , caption={Task3 en \texttt{main.c}}]
+/* 8-byte aligned stacks (ARM AAPCS requirement) */
+uint32_t task1_stack[STACK_SIZE] __attribute__((aligned(8)));
+uint32_t task2_stack[STACK_SIZE] __attribute__((aligned(8)));
+uint32_t task3_stack[STACK_SIZE] __attribute__((aligned(8)));
+
+uint32_t *sp_task1;
+uint32_t *sp_task2;
+uint32_t *sp_task3;
+
+volatile uint32_t current_task_id = 0;
+
+/* External Declarations */
+extern void wrapper_svc(void);
+extern void task_counter(void);
+extern void task_animation(void);
+extern void task_lullaby(void);
+
+/**
+ * @brief Kernel entry point.
+ * @return Never returns.
+ */
+int main(void) {
+    install_vector_table();
+    exception_set_exclusive_handler((enum exception_number)11, wrapper_svc);
+    
+    // Set PendSV priority to lowest (0xFF)
+    // Bits 23:16 control PRI_14 (PendSV)
+    SHPR3 |= (0xFF << 16);
+
+    // Hardware init
+    k_gpio_init(LED_DEBUG, 1); 
+    
+    k_gpio_init(BTN_PIN, 0);   
+    k_gpio_pullup(BTN_PIN);
+    k_gpio_irq_enable(BTN_PIN, 0); 
+    
+    NVIC_ISER = (1 << 13);
+
+    // Initialize tasks
+    task_init_stack(task1_stack, task_counter, &sp_task1);
+    task_init_stack(task2_stack, task_animation, &sp_task2);
+    task_init_stack(task3_stack, task_lullaby, &sp_task3); //added the task3 init
+    
+    os_start_first_task();
+
+    while (1);
+}
+\end{lstlisting}
+
+\bigskip
+
+\noindent
+La tabla de vectores es una lista de direcciones de memoria, cuando ocurre un evento (como presionar el botón), el hardware busca en esta tabla a qué función debe saltar. En \texttt{install\_vector\_table}, es como si le dijéramos al procesador: "\textit{Cuando ocurra la interrupción 13 (Botón), ve a \texttt{IO\_IRQ\_BANK0\_Handler} y cuando ocurra la excepción 14 (PendSV), ve a \texttt{PendSV\_Handler}}". Luego, le decimos al hardware dónde está esta nueva tabla escribiendo en el registro \texttt{SCB\_VTOR}.\\
+
+\noindent
+Con la instrucción \texttt{SHPR3 |= (0xFF << 16)} le damos a \textbf{PendSV} la prioridad más baja posible, con esto aseguramos que el cambio de contexto nunca interrumpa procesos de hardware urgentes.
+
+\bigskip
+
+\texttt{user\_app.c} \textbf{Tercera tarea (\textit{task\_lullaby})}
+
+\noindent
+Se implementó \text{task\_lullaby}, que enciende secuencialmente los cinco LEDs de acuerdo a la melodía de una canción. Los tiempos se calcularon con la constante \texttt{41,700,000 ciclos/segundo} correspondiente al \textbf{RP2040} a 125 MHz usando la función auxiliar dada por el ayudante \texttt{delay\_cycles\_exact}:
+
+\begin{lstlisting}[style=modernc, caption={Algoritmo para \texttt{task\_lullaby} en \texttt{user\_app.c}}]
+/**
+ * @brief Melody of a lullaby using LEDs
+ */
+void task_lullaby(void) {
+    setup_leds();
+
+    // Persistent state variables on the stack
+    int pins[] = {LED_0, LED_1, LED_2, LED_3, LED_4};
+
+    while (1) {
+      // Turn off all
+      for (int i = 0; i < 5; i++)
+	sys_gpio_set(pins[i], 0);
+
+      //Countdown
+      sys_gpio_set(pins[4], 1);
+      sys_gpio_set(pins[0], 1);
+      sys_gpio_set(pins[3], 1);
+      sys_gpio_set(pins[1], 1);
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(41700000); //3
+      sys_gpio_set(pins[4], 0);
+      sys_gpio_set(pins[0], 0);
+      delay_cycles_exact(41700000); //2
+      sys_gpio_set(pins[3], 0);
+      sys_gpio_set(pins[1], 0);
+      delay_cycles_exact(41700000); //1
+      sys_gpio_set(pins[2], 0);
+
+      delay_cycles_exact(20850000); //0
+
+      /* Firts part*/
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //P-A
+      sys_gpio_set(pins[4], 1);
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(22000000);
+      sys_gpio_set(pins[4], 0);
+      sys_gpio_set(pins[1], 0);      
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(14000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //P-A
+      sys_gpio_set(pins[4], 1);
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(31275000);//
+      sys_gpio_set(pins[4], 0);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(10000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(25000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(5000000);
+      sys_gpio_set(pins[2], 0);
+      delay_cycles_exact(5000000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(7500000);
+      sys_gpio_set(pins[2], 0);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(6000000);
+      sys_gpio_set(pins[3], 0);
+      delay_cycles_exact(2000000);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(8500000);
+      sys_gpio_set(pins[3], 0);
+      //P
+      sys_gpio_set(pins[4], 1);
+      delay_cycles_exact(5000000);
+      sys_gpio_set(pins[4], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(6000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(5000000);
+      sys_gpio_set(pins[1], 0);
+      //M
+      sys_gpio_set(pins[0], 1);
+      delay_cycles_exact(20000000);
+      sys_gpio_set(pins[0], 0);
+      //
+      delay_cycles_exact(9000000);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(20000000);
+      sys_gpio_set(pins[1], 0);
+      delay_cycles_exact(5000000);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(34500000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(3500000);
+      sys_gpio_set(pins[2], 0);
+      delay_cycles_exact(3500000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(1000000);
+      sys_gpio_set(pins[2], 0);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(4500000);
+      sys_gpio_set(pins[3], 0);
+      delay_cycles_exact(4500000);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(10000000);
+      sys_gpio_set(pins[3], 0);
+      //P
+      sys_gpio_set(pins[4], 1);
+      delay_cycles_exact(5000000);
+      sys_gpio_set(pins[4], 0);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(6000000);
+      sys_gpio_set(pins[3], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(6000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(6000000);
+      sys_gpio_set(pins[1], 0);
+      //M
+      sys_gpio_set(pins[0], 1);
+      delay_cycles_exact(10000000);
+      sys_gpio_set(pins[0], 0);
+
+      /* Second part */
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(20000000);
+      sys_gpio_set(pins[2], 0);
+      delay_cycles_exact(5000000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //I-M
+      sys_gpio_set(pins[3], 1);
+      sys_gpio_set(pins[0], 1);
+      delay_cycles_exact(31275000);
+      sys_gpio_set(pins[3], 0);
+      sys_gpio_set(pins[0], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(14000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //A
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[1], 0);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(9000000);
+      sys_gpio_set(pins[2], 0);
+      //I-M
+      sys_gpio_set(pins[3], 1);
+      sys_gpio_set(pins[0], 1);
+      delay_cycles_exact(25000000);//
+      sys_gpio_set(pins[3], 0);
+      sys_gpio_set(pins[0], 0);
+      //
+      delay_cycles_exact(9000000);	    
+      //P-D
+      sys_gpio_set(pins[4], 1);
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(10000000);//
+      sys_gpio_set(pins[4], 0);
+      sys_gpio_set(pins[2], 0);
+      //I-A
+      sys_gpio_set(pins[3], 1);
+      sys_gpio_set(pins[1], 1);
+      delay_cycles_exact(25000000);//
+      sys_gpio_set(pins[3], 0);
+      sys_gpio_set(pins[1], 0);
+      //
+      delay_cycles_exact(9000000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(5500000);
+      sys_gpio_set(pins[2], 0);
+      delay_cycles_exact(5500000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(8000000);
+      sys_gpio_set(pins[2], 0);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(7000000);
+      sys_gpio_set(pins[3], 0);
+      //P
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(7000000);
+      sys_gpio_set(pins[2], 0);
+      //I
+      sys_gpio_set(pins[3], 1);
+      delay_cycles_exact(5000000);
+      //D
+      sys_gpio_set(pins[2], 1);
+      delay_cycles_exact(5000000);
+      //M
+      sys_gpio_set(pins[0], 1);
+      delay_cycles_exact(58000000);
+      sys_gpio_set(pins[3], 0);
+      sys_gpio_set(pins[2], 0);
+      sys_gpio_set(pins[0], 0);
+      
+      //
+      delay_cycles_exact(90000);
+
+      /* Again */
+      //It repeats again
+      
+      delay_cycles_exact(41700000);
+    }
+}
+\end{lstlisting}
+
+\bigskip
+
+\noindent
+Se puede apreciar mejor el funcionamiento de esta tarea en el video de evidencias.
+
+\bigskip
+
+\texttt{pendsv.s} \textbf{Conmutador con Round-Robin de 3 tareas}
+
+\noindent
+Se amplió la lógica de saltos condicionales para distinguir tres IDs. El error más frecuente al escalar de 2 a 3 tareas es olvidar el segundo CMP en el bloque de carga, haciendo que la tarea 1 cargue el contexto de la tarea 3 en lugar de la 2:
+
+\begin{lstlisting}[style=modernc, caption={\texttt{pendsv.s}}]
+.syntax unified
+.cpu cortex-m0plus
+.thumb
+
+.global PendSV_Handler
+.type PendSV_Handler, %function
+
+/* Context Switching Routine for PendSV Exception */
+PendSV_Handler:
+    cpsid i       /* Disable interrupts to ensure atomicity during context switch */
+    mrs r0, psp   /* Mov PSP (Process Stack Pointer) to R0 for manipulation */
+    
+    /* Hardware automatically saves R0-R3, R12, LR, PC, and xPSR on the stack when an exception occurs.  We need to save the remaining registers (R4-R11) manually. */
+    
+    subs r0, #32       /* For 8 registers (R4-R11), we need 32 bytes (8 registers * 4 bytes each) */
+    stmia r0!, {r4-r7} /* Store R4-R7 in the lower part of the stack frame */
+    
+    /* Move R8-R11 to R4-R7 temporarily to store them */
+    mov r4, r8
+    mov r5, r9
+    mov r6, r10
+    mov r7, r11
+ 
+    stmia r0!, {r4-r7} /* Store R8-R11 in the upper part of the stack frame (offset +16) */
+    subs r0, #32 /* Restore R0 to point to the start of the full stack frame (including hardware-saved registers) */
+    ldr r2, =current_task_id /* Read current_task_id to determine where to save the current context */
+    ldr r3, [r2]            /* r3 now holds the current task ID */
+    
+    /* If current_task_id is 0, we just switched from task 0 to task 1, so we save the context of task 0 in sp_task1. If it's 1, we save in sp_task2. */
+    cmp r3, #0
+    beq save_task1   /* Task 0 is running, then we save to sp_task1 */
+    cmp r3, #1       /* Is task 1 is running? */
+    beq save_task2   /* Yes: save to sp_task2 */
+    b save_task3     /* Otherwise: task 2 is running and save to sp_task3 */
+
+save_task3:
+    /* Save context of task 2 and prepare task 0 as next (Round-Robin wrap) */
+    ldr r1, =sp_task3
+    str r0, [r1]            /* Update sp_task3 with the current stack pointer */
+    movs r3, #0             /* Prepare the ID for the next task (0) */
+    b switch_context        /* Jump to the context switch part */
+	
+save_task2:
+    ldr r1, =sp_task2
+    str r0, [r1]            /* Update sp_task2 with the current stack pointer of task 2 */
+    movs r3, #2             /* Prepare the ID for the next task (2) MINE */
+    b switch_context        /* Jump to the context switch part */
+
+save_task1:
+    ldr r1, =sp_task1
+    str r0, [r1]            /* Update sp_task1 with the current stack pointer of task 1 */
+    movs r3, #1             /* Prepare the ID for the next task (1) */
+
+switch_context:
+    str r3, [r2]            /* Store the new current_task_id (the task we are switching to) */
+
+    /* If current_task_id was 0, we need to load task 1's context. If it was 1, we load task 2's context. */
+    cmp r3, #0
+    beq load_task1   /* New task is 0, then load sp_task1 */
+    cmp r3, #1       /* Is new task is 1? */
+    beq load_task2   /* Yes: load sp_task2 */
+    b   load_task3   /* Otherwise: new task is 2 and load sp_task3 */
+
+load_task3:
+    /* Load stack pointer of Task 2 */
+    ldr r1, =sp_task3
+    ldr r0, [r1]            /* store in r0 the sp_task3 value, which is the stack pointer of task 3 */
+    b restore_context
+	
+load_task2:
+    ldr r1, =sp_task2
+    ldr r0, [r1]            /* store in r0 the sp_task2 value, which is the stack pointer of task 2 */
+    b restore_context	
+
+load_task1:
+    ldr r1, =sp_task1
+    ldr r0, [r1]            /* store in r0 the sp_task1 value, which is the stack pointer of task 1 */
+
+/* R0 points to the stack frame of the task we are switching to. We need to restore R4-R11 from this stack frame. */
+restore_context:
+    /* Recover R8-R11 registers first (they are in the upper part of the stack frame) */
+    adds r0, #16
+    ldmia r0!, {r4-r7}
+    mov r8, r4
+    mov r9, r5
+    mov r10, r6
+    mov r11, r7
+    
+    /* Recover R4-R7 registers (they are in the lower part of the stack frame) */
+    subs r0, #32            /* Get back to the start of the stack frame */
+    ldmia r0!, {r4-r7}      /* Restore R4-R7 from the stack frame */
+    
+    /* At this point, R0-R3, R12, LR, PC, and xPSR are still on the stack and will be automatically restored when we exit the exception handler. We just need to update the PSP to point to the new stack frame for the task we are switching to. */
+    adds r0, #16 
+    msr psp, r0 /* Update PSP to point to the new stack frame */
+    cpsie i     /* Enable interrupts again before exiting the exception handler */
+
+    /* Special return from exception to switch to the new task. The value 0xFFFFFFFD tells the processor to return to Thread mode and use the Process Stack Pointer (PSP) for the new task. */
+    ldr r0, =0xFFFFFFFD
+    bx r0
+
+.align 4
+\end{lstlisting}
+
+\bigskip
+
+Para que una tarea se pueda reanudarse, primero tiene que existir, como las tareas nunca se han ejecutado, tenemos que falsificar su estado inicial.
+
+\noindent
+la función \texttt{task\_init\_stack} toma un bloque de memoria y coloca los registros exactamente en el orden en que el hardware los esperaría si la tarea hubiera sido pausada. Se coloca el bit \textbf{Thumb} en $xPSR$ (\texttt{0x01000000}), el $pc$ apuntando al inicio de \texttt{task\_counter}, y el $lr$ con el valor \texttt{0xFFFFFFFD}. Deja 8 espacios vacíos para los registros de software ($r4$ - $r11$) y guarda el topde de la pila  en la variable \texttt{sp\_taskN}.\\
+
+\noindent
+\texttt{os\_start\_first\_task} es el \textit{motor de arranque}, carga la pila falsa de \texttt{sp\_task1}. Configura el procesador para que deje de usar la pila principal del sistema y empiece a usar la pila de procesos con \texttt{msr control, r0}. Extrae manualmente los registros iniciales y, con \texttt{bx r6}, salta a la primera instrucción de la tarea 1.\\
+
+\noindent
+El Disparador \texttt{IO\_IRQ\_BANK0\_Handler}, mientras la tarea 1 corre, si se presiona el botón el hardware salta a esta función. En lugar de cambiar de tarea aquí mismo, esta función simplemente levanta una bandera: \texttt{SCB\_ICSR |= ICSR\_PENDSVSET}, esto solicita una excepción \textbf{PendSV}. Como configuramos \textbf{PendSV} con la prioridad más baja, el procesador termina de atender el botón, verifica si hay otras urgencias, y como no las hay, dispara el \texttt{PendSV\_Handler}.\\
+
+\noindent
+En \texttt{PendSV\_Handler} ocurre el cambio de contexto. Se divide en 4 pasos lógicos:
+
+\begin{enumerate}
+\item Extraer y Guardar (Save):
+  \begin{lstlisting}[style=modernc]
+    cpsid i          // Apaga interrupciones para que nadie nos moleste
+    mrs r0, psp      // Copia el apuntador de la pila actual (PSP) a R0
+    subs r0, #32     // Hace espacio para 8 registros (R4-R11) = 32 bytes
+  \end{lstlisting}
+
+\item Enrutar y Guardar el Puntero (Switch)
+
+  \begin{lstlisting}[style=modernc]
+       ldr r2, =current_task_id
+       ldr r3, [r2] 
+       cmp r3, #0
+       beq save_task1
+       ...
+    
+    save_task1:
+       ldr r1, =sp_task1
+       str r0, [r1]     /* Guarda el apuntador actualizado en la variable sp_task1 */
+       movs r3, #1      /* Elige que la siguiente tarea sea la 1 */
+  \end{lstlisting}
+  
+  Aquí revisamos el \texttt{ID} de la tarea que acaba de ser interrumpida. Guardamos su apuntador de pila $r0$ en su \texttt{sp\_taskN} para no perderlo. Inmediatamente después, decidimos cuál es el \texttt{ID} de la siguiente tarea a ejecutar y lo guardamos en \texttt{current\_task\_id}.
+
+\item Cargar el Nuevo Apuntador (Load)
+
+  \begin{lstlisting}[style=modernc]
+      cmp r3, #0
+      beq load_task1
+      ...
+    
+  load_task2:
+      ldr r1, =sp_task2
+      ldr r0, [r1]     /* Lee el puntero de pila de la Tarea 2 hacia r0 */
+  \end{lstlisting}
+
+Ahora que sabemos que tarea toca, vamos a su variable \texttt{sp\_taskN}, tomamos su apuntador de pila donde se quedó la última vez y lo ponemos en $r0$.
+
+\item Restaurar y Arrancar (Restore)
+
+  \begin{lstlisting}[style=modernc]
+    adds r0, #16
+    msr psp, r0      /* Le decimos al procesador: "Este es el nuevo stack pointer" */
+    cpsie i          /* Volvemos a encender las interrupciones */
+    ldr r0, =0xFFFFFFFD
+    bx r0            /* Retorno */
+  \end{lstlisting}
+\end{enumerate}
+
+Recuperamos los registros $r4$ - $r11$ de la nueva tarea. Luego, actualizamos físicamente el registro del hardware y finalmente, la instrucción \texttt{bx 0xFFFFFFFD} le dice a ARM que terminó la excepción, regresa a modo Thread, usa el $psp$, y saca automáticamente $r0$ - $r3$, $r12$, $lr$, $pc$ y $xPSR$ de la nueva pila. Y así es como $pc$ salta donde se había quedado la nueva tarea.
+
+\newpage
+
+\section*{Diagrama de flujo del programa}
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.97\textheight,keepaspectratio]{diagrama.png}
+\end{center}
+
+\newpage
+
+\section*{Problema de Alineación a 8 Bytes}
+
+La \textbf{ARM AAPCS} exige que el $sp$ esté alineado a 8 bytes en el momento de llamar funciones (\texttt{push}/\texttt{pop}, \texttt{ldmia}, \texttt{stmia}). Si la pila no está alineada, ocurren los siguientes problemas concretos:
+
+\begin{table}[H]
+  \renewcommand{\arraystretch}{1.3}
+  \begin{tabular}{p{5cm}|p{10cm}}
+    \hline
+    \textbf{Problema} & \textbf{Consecuencia} \\
+    \hline
+    UsageFault / HardFault &
+    El procesador detecta acceso desalineado en operaciones \texttt{LDMIA}/\texttt{STMIA} de 8 bytes y lanza una excepción de fallo en tiempo de ejecución. \\
+    \hline
+    Corrupción del Hardware Frame &
+    Al entrar \texttt{PendSV}, el procesador empuja el \textit{Hardware Frame} (8 registros = 32 bytes) con padding opcional. Si $sp$ no es múltiplo de 8, el frame queda en una dirección errónea y los valores restaurados son basura. \\
+    \hline
+    Fallo silencioso en STMIA/LDMIA &
+    Las instrucciones de carga/almacenamiento múltiple pueden leer o escribir en direcciones incorrectas sin señal de error visible, corrompiendo datos de otras tareas o del kernel. \\
+    \hline
+    Comportamiento no determinista &
+    El programa puede funcionar intermitentemente según el contenido de la memoria adyacente, haciendo el bug difícil de reproducir y diagnosticar. \\
+    \hline
+  \end{tabular}
+\end{table}
+
+El atributo \texttt{\_\_attribute\_\_((aligned(8)))} en la declaración de cada pila garantiza que el compilador ubique el buffer en una dirección múltiplo de 8, cumpliendo el requisito del ABI y evitando todos los problemas anteriores.
+
+\bigskip
+\bigskip
+
+\section*{Evidencias}
+
+\href{https://drive.google.com/file/d/132fOvRoadHz8GxMy366AXpoB4ttFs6qn/view?usp=drivesdk}
+     {\textbf{\textit{\textcolor{linkblue}{Evidencia Práctica 3 Video}}}}
+
+\newpage
+
+\section*{Concluciones}
+
+Esta práctica demostramos en la implementación que el cambio de contexto es el \textit{corazón} de cualquier sistema multitarea:
+
+\begin{itemize}
+\item La división \textbf{\textit{Hardware Frame}}/\textbf{\textit{Software Frame}} no es arbitraria: el procesador \textbf{ARM} \texttt{Cortex-M0+} gestiona automáticamente el primero, pero el código del sistema operativo es responsable explícito del segundo.
+  
+\item \textbf{PendSV} es la excepción correcta para el cambio de contexto precisamente porque tiene la prioridad más baja, garantizando que el switch ocurra solo cuando no hay otro trabajo pendiente.
+  
+\item  Escalar de 2 a 3 tareas en ensamblador requiere revisar cada punto de decisión binaria (\texttt{cmp}/\texttt{beq}) para convertirlo en un árbol de tres ramas, tanto en el bloque \texttt{save} como en el bloque \texttt{load}.
+  
+\item  La alineación a 8 bytes no es opcional: una pila desalineada puede producir fallos de hardware silenciosos o HardFaults difíciles de diagnosticar.
+  
+\item  El valor especial \texttt{0xFFFFFFFD} como \texttt{EXC\_RETURN} comunica al procesador que debe regresar a Thread mode usando el $psp$, completando así el ciclo de restauración sin instrucciones adicionales.
+\end{itemize}
+
+\end{document}

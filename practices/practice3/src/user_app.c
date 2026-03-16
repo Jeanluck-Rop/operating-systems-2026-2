@@ -2,11 +2,11 @@
 #include "syscalls.h"
 
 /* Pin Definitions */
-#define LED_0 7
-#define LED_1 9
+#define LED_0 5
+#define LED_1 8
 #define LED_2 10
-#define LED_3 12
-#define LED_4 13
+#define LED_3 13
+#define LED_4 15
 
 
 /**

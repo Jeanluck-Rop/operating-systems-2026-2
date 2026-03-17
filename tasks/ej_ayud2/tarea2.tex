@@ -1,0 +1,257 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx, geometry, xcolor}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tikz}
+
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\usepackage{tcolorbox}
+
+\tcbuselibrary{skins, breakable}
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{tlbblue}{HTML}{2E4A8C}
+\definecolor{pagered}{HTML}{8C2E2E}
+\definecolor{faultgreen}{HTML}{2E6B4F}
+\definecolor{softgray}{HTML}{F5F5F5}
+\definecolor{accentorange}{HTML}{D4630A}
+\geometry{margin=3cm, top=3cm, bottom=3cm}
+
+\newtcolorbox{conceptbox}[2][]{
+  colback=softgray,
+  colframe=tlbblue,
+  fonttitle=\bfseries\color{white},
+  coltitle=white,
+  colbacktitle=tlbblue,
+  title={#2},
+  arc=4pt,
+  boxrule=0.8pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  #1
+}
+
+\newtcolorbox{formulabox}[1][]{
+  colback=tlbblue!6,
+  colframe=tlbblue,
+  arc=4pt,
+  boxrule=1pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  #1
+}
+
+\newtcolorbox{resultbox}[1][]{
+  colback=faultgreen!8,
+  colframe=faultgreen,
+  fonttitle=\bfseries,
+  coltitle=faultgreen,
+  arc=4pt,
+  boxrule=1.2pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  #1
+}
+
+\begin{document}
+
+\input{portada}
+
+\section*{Ejercicio 14}
+
+\begin{quote}
+  \itshape
+  Se te proporcionan los siguientes datos sobre un sistema de memoria virtual:
+  \begin{enumerate}[label=(\alph*)]
+    \item La TLB puede almacenar 1024 entradas y se puede acceder a ella
+          en 1 ciclo de reloj (1\,ns).
+    \item Una entrada en la tabla de páginas puede encontrarse en 100 ciclos
+          de reloj o 100\,ns.
+    \item El tiempo promedio de reemplazo de página es de 6\,ms.
+  \end{enumerate}
+  Si el $99\%$ de las referencias a páginas son resueltas por la TLB, y solo
+  el $0{,}01\%$ de ellas producen un fallo de página (\textit{page fault}),
+  ¿cuál es el tiempo efectivo de traducción de direcciones?
+\end{quote}
+
+\begin{conceptbox}{Memoria Virtual}
+  La \textbf{memoria virtual} es una técnica del sistema operativo que separa el espacio de direcciones
+  \emph{lógico} (lo que el proceso ``cree'' que tiene) del espacio de direcciones \emph{físico}
+  (la RAM real disponible), gracias a ello, un proceso puede usar más memoria de la que existe físicamente. El \textbf{SO} divide ese espacio en bloques de tamaño fijo llamados \textbf{páginas} (\emph{pages}) y los almacena, según se necesiten, tanto en RAM como en disco.
+\end{conceptbox}
+
+\medskip
+
+\noindent
+Cuando un proceso referencia una dirección, el hardware necesita \textit{traducir} esa dirección virtual a su dirección física correspondiente. Esa traducción se realiza mediante la \textbf{tabla de páginas} (\textit{page table}), una estructura de datos almacenada en RAM.
+
+\medskip
+
+\begin{conceptbox}{Tabla de Páginas (\textit{Page Table})}
+  \begin{itemize}
+  \item Cada entrada (PTE, \textit{Page Table Entry}) mapea un número de página virtual
+    a un número de marco físico (\emph{frame}) que la contiene en RAM, también guarda bits de control (\textit{presente/ausente}, permisos de lectura/escritura, bit de referencia,etc).
+  \item La tabla de páginas reside en \emph{RAM}, consultarla implica un acceso a memoria principal, lo que cuesta \textbf{100~ns} en este ejercicio.
+  \item Si la página referenciada \textbf{no está en RAM} (bit de validez = 0), se produce un \textbf{fallo de página} (\emph{page fault}) y el SO debe traerla desde disco, con un costo altísimo (\textbf{6~ms} = $6{,}000{,}000$~ns).
+  \end{itemize}
+
+  Por lo tanto, acceder a la tabla de páginas implica una lectura adicional a la RAM \emph{antes} de acceder al dato real, esto duplica (o más) el tiempo de acceso a memoria.
+\end{conceptbox}
+
+\bigskip
+
+\begin{conceptbox}{TLB — Translation Lookaside Buffer}
+La \textbf{TLB} (\textit{Translation Lookaside Buffer}) es una memoria caché de alta velocidad integrada en la \textbf{MMU} (\textit{Memory Management Unit}) del procesador que almacena las traducciones más recientes de página virtual $\to$ marco físico, de modo que no sea necesario consultar la tabla de páginas en RAM en cada acceso; si la traducción ya está ahí, se obtiene en \textbf{un solo ciclo de reloj (1~ns)}.
+
+\begin{itemize}
+  \item Cada entrada de la TLB contiene: número de página virtual,
+        número de marco físico y bits de validez/permiso.
+  \item El acceso a la TLB es \textbf{extremadamente rápido}: típicamente
+        1 ciclo de reloj ($\approx 1$\,ns en hardware moderno).
+  \item Su tamaño es reducido (32 a 2048 entradas), así que solo guarda un
+        subconjunto del espacio de páginas.
+\end{itemize}
+\end{conceptbox}
+
+\medskip
+\noindent
+El flujo de traducción con \textbf{TLB} es el siguiente:
+
+\begin{conceptbox}{Flujo traducción con \textbf{TLB}}
+  \begin{enumerate}
+  \item La CPU genera una dirección virtual con número de página $p$.
+  \item Se consulta el TLB con $p$:
+    \begin{itemize}
+    \item \textbf{TLB Hit}: la página buscada \emph{está} en la TLB, la traducción toma \textbf{1\,ns}, no se accede a la tabla de páginas.
+    \item \textbf{TLB Miss}: la página \emph{no} está en la TLB, se debe consultar la tabla de páginas en RAM (\textbf{+100\,ns}). Luego se actualiza la TLB con la nueva entrada.
+    \item \textbf{Page Fault}: además de no estar en la TLB, la página \emph{tampoco está en RAM} (está en disco), por lo que el SO debe cargarla, lo que cuesta \textbf{+6\,ms} (varios órdenes de magnitud más lento).
+    \end{itemize}
+  \end{enumerate}
+\end{conceptbox}
+
+En este caso, el \textbf{TLB} tiene capacidad para \textbf{1024 entradas}, dado que las páginas típicamente son de \textit{4 KB}, un \textbf{TLB} de 1024 entradas puede cubrir hasta $1024 \times 4\,\text{KB} = 4\,\text{MB}$ de espacio de trabajo sin fallos. Cuanto mayor es el TLB, mayor es la probabilidad de acierto (\emph{hit rate}).
+
+\subsection*{Datos del Problema}
+
+\noindent
+El enunciado nos da las siguientes tasas sobre el total de referencias a memoria:
+
+\begin{center}
+  \begin{tabular}{lll}
+    \textbf{Evento} & \textbf{Probabilidad} & \textbf{Símbolo} \\
+    \hline
+    TLB hit & $99\%$ & $P_{\text{hit}}$   \\
+    Page fault & $0.01\%$ & $P_{\text{fault}}$ \\
+    TLB miss sin page fault & $?$ & $P_{\text{miss}}$  \\
+  \end{tabular}
+\end{center}
+
+\noindent
+Como las tres situaciones son mutuamente excluyentes y cubren el $100\%$ de los casos:
+
+\begin{formulabox}
+  \[
+  P_{\text{hit}} + P_{\text{miss}} + P_{\text{fault}} = 1
+  \]
+  \[
+  P_{\text{miss}} = 1 - P_{\text{hit}} - P_{\text{fault}}
+  = 1 - 0{,}99 - 0{,}0001
+  = \mathbf{0{,}0099} \quad (0{,}99\%)
+  \]
+\end{formulabox}
+
+Es decir, de cada 10\,000 referencias:
+\begin{itemize}
+\item \textbf{9\,900} son resueltas por la TLB directamente.
+\item \textbf{99} requieren ir a la tabla de páginas en RAM (TLB miss, no fault).
+\item \textbf{1} provoca un fallo de página (page fault).
+\end{itemize}
+
+\subsection*{Tiempo de cada caso}
+\begin{conceptbox}{Tiempo Efectivo de Acceso (EAT)}
+  El \textbf{Tiempo Efectivo de Acceso} (\textit{Effective Access Time}, EAT) es el promedio ponderado de los tiempos de acceso, donde los pesos son las probabilidades de que ocurra cada escenario:
+\[
+  \text{EAT} = \sum_{i} P_i \cdot T_i
+\]
+Este valor representa cuánto tarda, \textbf{en promedio}, una referencia a memoria en ser resuelta, considerando los efectos de la \textbf{TLB}, la tabla de páginas y los fallos de página.
+\end{conceptbox}
+
+\begin{center}
+  \renewcommand{\arraystretch}{1.4}
+  \begin{tabular}{llp{5.3cm}r}
+    \textbf{Caso} & \textbf{Prob.} & \textbf{Componentes del tiempo} & \textbf{Tiempo (ns)} \\
+    \hline
+    TLB hit   & $0{,}99$   & Solo TLB & $1$ \\
+    TLB miss  & $0{,}0099$ & TLB {+} page table & $1 + 100 = 101$ \\
+    Page fault & $0{,}0001$ & TLB {+} page table {+} reemplazo de página & $1 + 100 + 6{,}000{,}000 = 6{,}000{,}101$ \\
+    \hline
+  \end{tabular}
+\end{center}
+
+\subsection*{Cálculo del tiempo efectivo de traducción}
+
+\begin{formulabox}
+  \[
+  T_{\text{efectivo}} =
+  P_{\text{hit}} \cdot T_{\text{hit}}
+  + P_{\text{miss}} \cdot T_{\text{miss}}
+  + P_{\text{fault}} \cdot T_{\text{fault}}
+  \]
+\end{formulabox}
+
+Sustituyendo los valores:
+\begin{align*}
+  T_{\text{efectivo}}
+  &= (0{.}99)\times(1)
+  + (0{.}0099)\times(101)
+  + (0{.}0001)\times(6{.}000{.}101) \\[6pt]
+  &= 0{.}99
+  + 0{.}9999
+  + 600{.}0101 \\[6pt]
+  &\approx \boxed{602{,}00 \text{ ns}}
+\end{align*}
+
+\subsection*{Desglose visual de la contribución de cada término}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lrrl}
+  \textbf{Término} & \textbf{Contribución (ns)} & \textbf{Porcentaje del EAT\%}\\
+  \hline
+  TLB hit & $0{.}99$ & $\approx 0{.}16\%$ \\
+  TLB miss & $0{.}9999$ & $\approx 0{.}17\%$ \\
+  Page fault & $600{.}01$ & $\approx 99{.}67\%$ \\
+  \hline
+  \textbf{Total} & $\mathbf{601{.}9999}$ & $100\%$ \\
+\end{tabular}
+\end{center}
+
+\begin{conceptbox}{Conclusiones}
+\begin{enumerate}[label=\arabic*.]
+\item \textbf{El page fault domina el EAT.} Aunque ocurre solo en 1 de cada 10\,000 referencias (el $0{,}01\%$ de las veces), su enorme costo ($6\,\text{ms} = 6{,}000{,}000\,\text{ns}$) hace que \textbf{dominen el 99,67\% del tiempo efectivo total}). Reducir la tasa de page fault (aumentando RAM o mejorando el algoritmo de reemplazo) es la optimización más impactante posible.
+  
+\item \textbf{La TLB es extraordinariamente efectiva.} Con un 99\% de \textit{hit rate}, los accesos normales cuestan prácticamente lo mismo que un simple acceso de 1\,ns. Sin \textbf{TLB}, cada acceso costaría al menos 101\,ns (un acceso adicional a RAM para la tabla de páginas).
+  
+\item \textbf{Jerarquía de costos:} El disco es $\mathbf{60{,}000}$ veces más lento que la RAM y $\mathbf{6{,}000{,}000}$ veces más lento que la TLB.
+\end{enumerate}
+\end{conceptbox}
+
+\begin{resultbox}
+  \textbf{Respuesta final:}
+  \medskip
+
+  El tiempo efectivo de traducción de direcciones es aproximadamente:
+  \[
+  \boxed{T_{\text{efectivo}} \approx 602\,\text{ns}}
+  \]
+  
+  El principal factor que eleva el EAT es el (\emph{page fault}) que, aunque infrecuente, impone un costo tan elevado que domina completamente el promedio.
+\end{resultbox}
+
+\end{document}

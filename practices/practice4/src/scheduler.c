@@ -82,7 +82,6 @@ void isr_systick() {
 	cmd_state = 1;
       }
     }
-
     else if (cmd_state == 1) {
       //Waiting task id
       if (c >= '1' && c <= '4') {
@@ -170,7 +169,7 @@ uint32_t schedule(uint32_t current_sp) {
   if (tasks[next_task].state == READY) {
     current_task = next_task;
     tasks[current_task].state = RUNNING;
-    //Realoaf
+    //Reaload quantum with the income one
     tasks[current_task].remaining = tasks[current_task].quantum;
     return (uint32_t)tasks[current_task].sp;
   }

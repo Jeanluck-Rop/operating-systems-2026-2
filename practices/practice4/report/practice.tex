@@ -1,0 +1,447 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{listings, float}
+\usepackage{graphicx, geometry, xcolor, amsmath, enumitem}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{margin=3cm, top=3cm, bottom=3cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeorg}\bfseries
+}
+
+\definecolor{linkblue}{HTML}{1A167A}
+
+\begin{document}
+
+\input{cover}
+
+\newpage
+
+\section*{Introducción}
+ 
+\subsection*{Planteamiento del Problema}
+ 
+En la práctica anterior el cambio de contexto entre tareas dependía de un evento externo (un botoncito), lo que nos imposibilita la ejecución concurrente autónoma. Y como sabemos, un \textbf{sistema operativo} real necesita garantizar que ninguna tarea monopolice el $CPU$ de forma indefinida, distribuyendo el tiempo de cómputo de manera justa y predecible.\\
+ 
+En esta práctica resolvemos ese problema en dos fases:
+\begin{enumerate}[label=\textbf{\arabic*.}]
+\item \textbf{Fase A}: Reemplazamos el botoncito por un temporizador de hardware (\textit{SysTick}) que genera interrupciones cada 10\,ms y habilitamos la comunicación por USB para "encolar" tareas desde la terminal.
+\item \textbf{Fase B}: Agregar un campo de \textit{peso} (lo llamaremos \texttt{quantum}) al \textbf{TCB} para implementar \textit{\textbf{Round Robin Ponderado}} ($WRR$) y asignar prioridades en tiempo real.
+\end{enumerate}
+ 
+\subsection*{Objetivos}
+\begin{itemize}
+\item Implementar la expropiación automática de CPU mediante el temporizador \textit{SysTick} sobre la Raspberry Pi Pico.
+\item Diseñar el \textbf{Bloque de Control de Tareas} (\textbf{TCB}) y gestionar los estados \texttt{DORMANT}, \texttt{READY} y \texttt{RUNNING}.
+\item Implementar el algoritmo Round Robin estándar y evolucionarlo hacia un \textit{Round Robin Ponderado} que permita asignar cuantas de tiempo variables.
+\item Demostrar el impacto de los retardos por \textit{busy waiting} en la planificación concurrente y comprender su efecto en la percepción visual.
+\end{itemize}
+ 
+\newpage
+
+\section*{Conceptos}
+
+\subsection*{Bloque de Control de Tareas (TCB)}
+El \textbf{Task Control Block} (\textbf{TCB}) es la estructura de datos central de cualquier planificador, esta concentra toda la información que el Kernel necesita para suspender y reanudar un proceso como si nunca hubiera sido interrumpido: el apuntador a la pila (\texttt{sp}), el estado de ciclo de vida (\texttt{state}), el espacio de
+memoria exclusivo de la tarea (\texttt{stack}) y la dirección de la función que la implementa (\texttt{entry\_point}).
+ 
+\subsection*{Round Robin (RR)}
+\textit{Round Robin} es el algoritmo de planificación más simple con equidad garantizada, mantiene una cola circular de procesos \texttt{READY}; cuando el temporizador expira, la tarea actual es expulsada y la siguiente de la cola recibe el CPU durante exactamente un \textit{quantum} de tiempo. La ecuación del reparto es directa: si hay $N$ tareas con el mismo \textit{quantum}, cada una recibe $\frac{1}{N}$ del tiempo total de CPU.
+ 
+\subsection*{Round Robin Ponderado (WRR)}
+El \textit{Round Robin Ponderado} extiende la equidad del \textit{\textbf{RR}} permitiendo asignar a cada proceso un \textit{quantum} $q_i$ que actúa como multiplicador de quantum.  El reparto de CPU se convierte en:
+\[
+  \text{CPU}_{i} = \frac{q_i}{\displaystyle\sum_{j=1}^{N} q_j}
+\]
+ 
+Una tarea con $q = 3$ ejecuta durante 3 \textit{ticks} del \textit{SysTick} (30\,ms) mientras que una con $q = 1$ solo ejecuta 10\,ms por turno.
+ 
+\subsection*{SysTick y PendSV}
+El \textit{SysTick} es un temporizador descendente, al llegar a cero genera una excepción de prioridad alta (\texttt{isr\_systick}). Para nuestra implementación de \texttt{ISR} no realizamos el cambio de contexto directamente, sino que activamos la excepción \textbf{PendSV} (como en la anterior práctica), que tiene la prioridad más baja del sistema y se ejecuta únicamente cuando no hay otras excepciones pendientes, garantizando que el cambio de contexto ocurra en el momento más seguro posible.
+ 
+\subsection*{Syscall \texttt{sys\_exit()} y PendSV}
+Cuando una tarea finita termina su trabajo invoca \texttt{sys\_exit()}, esta función emite una instrucción \texttt{SVC} que eleva el privilegio al modo Kernel, donde \texttt{k\_task\_exit()} marca el estado de la tarea como \texttt{DORMANT} y activa inmediatamente \textbf{PendSV} para que el planificador elija la siguiente tarea sin esperar el siguiente tick.
+ 
+\bigskip
+
+\section*{Fase A: Round Robin y Gestión de Tareas}
+ 
+\subsection*{Estructura TCB (\texttt{scheduler.h})}
+ 
+Esta estructura base define los cuatro campos mínimos para gestionar una tarea:
+ 
+\begin{lstlisting}[style=modernc, caption={TCB base en \texttt{scheduler.h}}]
+// Estados posibles de una tarea
+typedef enum {
+  DORMANT, // Inactiva, no esta en la cola
+  READY,   // Lista para ejecutarse
+  RUNNING  // Ejecutandose actualmente
+} task_state_t;
+
+// Task Control Block
+typedef struct {
+  uint32_t *sp;                  // Puntero de Pila actual
+  task_state_t state;            // Estado de la tarea
+  uint32_t stack[STACK_SIZE];    // Espacio de memoria de la pila
+  void (*entry_point)(void);     // Funcion de la tarea
+  uint8_t quantum; //priority quantum
+  uint8_t remaining;  //quantum countdown
+} tcb_t;
+
+\end{lstlisting}
+ 
+El campo \texttt{sp} permite congelar y restaurar el contexto exacto de la tarea, \texttt{stack[]} es la memoria privada de cada proceso y evita que los marcos de pila de distintas tareas se sobrepongan.
+ 
+\subsection*{Inicialización del Stack (\texttt{init\_task\_stack()})}
+Para que el manejador \textbf{PendSV} pueda restaurar el contexto de una tarea recién creada, su pila debe pre-cargarse con un \textit{frame} ficticio que imita el que el hardware genera al entrar en una excepción:
+ 
+\begin{lstlisting}[style=modernc, caption={Frame ficticio de hardware en \texttt{init\_task\_stack()}}]
+/**
+ * @brief Initialize the task stack so it looks like an interrupted context.
+ * @param id Task index in the task table.
+ */
+void init_task_stack(int id) {
+  uint32_t *stack_top = tasks[id].stack + STACK_SIZE;
+    
+  // Hardware stack frame (simulated)
+  *(--stack_top) = 0x01000000; // xPSR (Thumb bit enabled)
+  *(--stack_top) = (uint32_t)tasks[id].entry_point; // PC (Program Counter)
+  *(--stack_top) = 0xFFFFFFFD; // LR (Return to Thread mode using PSP)
+  *(--stack_top) = 0; // R12
+  *(--stack_top) = 0; // R3
+  *(--stack_top) = 0; // R2
+  *(--stack_top) = 0; // R1
+  *(--stack_top) = 0; // R0
+
+  // Software stack frame (simulated, R4-R11)
+  for (int i = 0; i < 8; i++) {
+    *(--stack_top) = 0;
+  }
+    
+  tasks[id].sp = stack_top;
+  tasks[id].state = READY;
+  //Load initial quantum
+  tasks[id].remaining = tasks[id].quantum;
+}
+\end{lstlisting}
+ 
+Al terminar, \texttt{tasks[id].sp} apunta a la base del frame y la tarea queda en estado \texttt{READY}.
+ 
+\subsection*{Control por USB (\texttt{isr\_systick()})}
+La función \texttt{getchar\_timeout\_us(0)} devuelve el carácter disponible de inmediato o \texttt{PICO\_ERROR\_TIMEOUT} si no hay ninguno, garantizando que la \texttt{ISR} nunca se bloquee:
+ 
+\begin{lstlisting}[style=modernc, caption={Polling no bloqueante de la UART USB en \texttt{isr\_systick()}}]
+int c = getchar_timeout_us(0);
+if (c >= '1' && c <= '4') {
+    int idx = c - '1';
+    if (tasks[idx].state == DORMANT) {
+        init_task_stack(idx);
+        printf("Tarea %d agregada a la cola.\n", idx + 1);
+    }
+}
+// Disparar el cambio de contexto
+*(volatile uint32_t *)0xE000ED04 = (1 << 28);
+\end{lstlisting}
+ 
+\subsection*{Tareas de Usuario \texttt{finite} e \texttt{infinite} (\texttt{user\_app.c})}
+Implementamos dos nuevas tareas que ejercitan los dos posibles ciclos de vida:
+ 
+\begin{lstlisting}[style=modernc, caption={Tarea infinita: parpadeo rápido de LED en \texttt{task3\_infinite()}}]
+/**
+ * @brief Infinite task that rapidly blinks LED_1.
+ */
+void task3_infinite(void)
+{
+  sys_gpio_dir(LED_1, 1);
+  while (1)
+    {
+      sys_gpio_set(LED_1, 1);
+      delay_cycles_exact(41700000 / 40);
+      sys_gpio_set(LED_1, 0);
+      delay_cycles_exact(41700000 / 40);
+    }
+}
+\end{lstlisting}
+ 
+\begin{lstlisting}[style=modernc, caption={Tarea finita: 15 parpadeos y \texttt{sys\_exit()} en \texttt{task4\_finite()}}]
+/**
+ * @brief Finite task that blinks an LED 5 times and then terminates.
+ */
+void task4_finite(void)
+{
+  sys_gpio_dir(LED_3, 1);
+  
+  for (int i = 0; i < 15; i++)
+    {
+      sys_gpio_set(LED_3, 1);
+      delay_cycles_exact(41700000 / 10);
+      sys_gpio_set(LED_3, 0);
+      delay_cycles_exact(41700000 / 10);
+    }
+  //Life cycle completed, then we notify the Kernel this task finished
+  sys_exit();
+}
+\end{lstlisting}
+ 
+\subsection*{Syscall \texttt{sys\_exit()} (\texttt{k\_task\_exit()})}
+Cuando el Kernel intercepta la syscall \texttt{EXIT}, marca la tarea como \texttt{DORMANT} y fuerza un cambio de contexto inmediato sin esperar al siguiente tick del \textit{SysTick}:
+ 
+\begin{lstlisting}[style=modernc, caption={Gestión del fin de tarea en \texttt{k\_task\_exit()}}]
+/**
+ * @brief Handle the EXIT syscall by terminating the current task.
+ */
+void k_task_exit(void) {
+  if (current_task != -1) {
+    tasks[current_task].state = DORMANT;
+    printf("Tarea %d terminada.\n", current_task + 1);
+    // Force an immediate context switch
+    *(volatile uint32_t *)0xE000ED04 = (1 << 28);
+  }
+}
+\end{lstlisting}
+ 
+\subsection*{Algoritmo Round Robin (\texttt{schedule()})}
+La función \texttt{schedule()} recorre el arreglo circular de tareas buscando la
+siguiente en estado \texttt{READY}, garantizando que ninguna sea ignorada
+indefinidamente:
+ 
+\begin{lstlisting}[style=modernc, caption={Búsqueda Round Robin en \texttt{schedule()}}]
+int next = current_task;
+int tries = 0;
+do {
+    next = (next + 1) % MAX_TASKS;
+    tries++;
+    if (tasks[next].state == READY) break;
+} while (tries < MAX_TASKS);
+ 
+if (tasks[next].state == READY) {
+    current_task = next;
+    tasks[current_task].state = RUNNING;
+    return (uint32_t)tasks[current_task].sp;
+}
+return current_sp; // Cola vacia: idle
+\end{lstlisting}
+ 
+\section*{Análisis de Concurrencia: Busy Waiting y Time Slicing}
+ 
+\subsection*{Fenómeno de ralentización (\textit{stuttering})}
+ 
+Al encolar las cuatro tareas con quantum $q=1$, el \textit{SysTick} divide el CPU en ranuras de 10\,ms que se reparten equitativamente, cada tarea recibe únicamente $\frac{1}{N}$ del tiempo total. Con $N=4$ tareas activas, una animación diseñada para actualizar sus LEDs cada 50\,ms real en realidad tarda:
+ 
+\[
+  t_{\text{efectivo}} = t_{\text{nominal}} \times N = 50\,\text{ms} \times 4 = 200\,\text{ms}
+\]
+ 
+El resultado perceptible es que la animación que originalmente debería moverse a 20 cuadros por segundo se reduce a solo 5, produciendo un efecto de parpadeo discontinuo (\textit{stuttering}).
+ 
+\subsection*{El papel del Busy Waiting} 
+Las tareas utilizan \texttt{delay\_cycles\_exact()}, un bucle que quema ciclos de CPU sin realizar trabajo útil.  Desde la perspectiva del planificador la tarea continúa en estado \texttt{RUNNING} durante todo ese retardo, impidiendo que otras tareas avancen. Este es el costo fundamental del \textit{busy waiting} pues, el CPU no puede distinguir entre ``una tarea que procesa datos'' y ``una tarea que espera''; ambas consumen el mismo quantum.\\
+
+\noindent
+En un \textbf{sistema operativo} real este problema se resuelve con llamadas de sistema bloqueantes como \texttt{sleep()} que colocan la tarea en estado \texttt{BLOCKED} y ceden el CPU voluntariamente. En esta práctica se conserva el busy waiting para ilustrar precisamente este efecto.
+ 
+\subsection*{Impacto matemático del Time Slicing}
+La tabla siguiente resume el tiempo efectivo de CPU por turno según el número de tareas activas con \textit{Round Robin} puro ($q = 1$)\footnotemark:
+ 
+\begin{table}[H]
+  \centering
+  \caption{Reparto de CPU con Round Robin puro y SysTick = 10\,ms}
+  \begin{tabular}{ccc}
+    \textbf{Tareas activas ($N$)} & \textbf{Tiempo por turno} & \textbf{Factor de lentitud} \\
+    \hline
+    1 & 10\,ms & $1\times$ \\
+    2 & 10\,ms & $2\times$ \\
+    3 & 10\,ms & $3\times$ \\
+    4 & 10\,ms & $4\times$ \\
+  \end{tabular}
+\end{table}
+ 
+\footnotetext{El tiempo por turno no cambia (siempre 10\,ms), pero la frecuencia con que cada tarea recibe CPU sí disminuye linealmente con $N$.}
+ 
+\newpage
+
+\section*{Fase B: Round Robin Ponderado (WRR)}
+
+\subsection*{Modificación del TCB}
+Se añaden dos campos al TCB, el quantum asignado a la tarea y la cuenta regresiva de ticks restantes en el quantum actual.
+ 
+\begin{lstlisting}[style=modernc, caption={Nuevos campos en \texttt{tcb\_t} --- \texttt{scheduler.h}}]
+typedef struct {
+    uint32_t    *sp;
+    task_state_t state;
+    uint32_t     stack[STACK_SIZE];
+    void        (*entry_point)(void);
+    uint8_t quantum; //priority quantum
+    uint8_t remaining;  //quantum countdown
+} tcb_t;
+\end{lstlisting}
+ 
+\subsection*{Lógica WRR en \texttt{isr\_systick()}}
+La \texttt{ISR} del \textit{SysTick} ya no dispara \textbf{PendSV} incondicionalmente, sino que primero decrementa el contador, solo cuando llega a cero expulsa a la tarea:
+ 
+\begin{lstlisting}[style=modernc, caption={Control del quantum en \texttt{isr\_systick()} --- \texttt{scheduler.c}}]
+//Decrement quantum
+  if (current_task != -1 && tasks[current_task].state == RUNNING) {
+    if (tasks[current_task].remaining > 1) {
+      tasks[current_task].remaining--;
+      return;   //task keep CPU, NOT launch pendsv
+    }
+    //Quantum spent: reload next time
+    tasks[current_task].remaining = tasks[current_task].quantum;
+  }
+  
+  // Write to the Interrupt Control and State Register (ICSR)
+  *(volatile uint32_t *)0xE000ED04 = (1 << 28);
+\end{lstlisting}
+ 
+\subsection*{Recarga del quantum en \texttt{schedule()}}
+Cuando el planificador elige una nueva tarea, recarga su contador con su quantum para iniciar el quantum desde el valor correcto:
+ 
+\begin{lstlisting}[style=modernc, caption={Recarga del quantum al seleccionar tarea en \texttt{schedule()}}]
+// If a runnable task was found
+if (tasks[next_task].state == READY) {
+    current_task = next_task;
+    tasks[current_task].state = RUNNING;
+    //Reaload quantum with the income one
+    tasks[current_task].remaining = tasks[current_task].quantum;
+    return (uint32_t)tasks[current_task].sp;
+}
+\end{lstlisting}
+ 
+\subsection*{Asignación de pesos por terminal USB}
+ 
+También implementamos un mini-parser de dos pasos en la \texttt{ISR} que, al recibir la tecla \texttt{q}, el Kernel entra en modo de configuración, solicita el identificador de tarea y luego el nuevo peso sin bloquear la \texttt{ISR} entre pasos:
+ 
+\begin{lstlisting}[style=modernc, caption={Parser de comandos de peso en \texttt{isr\_systick()}}]
+//USB comms parser state
+//0 = idle
+//1 = 'q' received, wait id
+//2 = id received, wait quantum (weight)
+static int cmd_state = 0;
+static int cmd_task_id = -1;
+
+if (c == 'q') {
+    printf("[Kernel] Peso > selecciona tarea (1-4): ");
+    cmd_state = 1;
+}
+else if (cmd_state == 1 && c >= '1' && c <= '4') {
+    cmd_task_id = c - '1';
+    cmd_state = 2;
+}
+else if (cmd_state == 2 && c >= '1' && c <= '9') {
+    tasks[cmd_task_id].quantum = c - '0';
+    tasks[cmd_task_id].remaining = c - '0';
+    printf("[Kernel] Tarea %d -> peso=%d (%d ms/quantum).\n",
+           cmd_task_id + 1, c - '0', (c - '0') * 10);
+    cmd_state = 0;
+}
+\end{lstlisting}
+ 
+\subsubsection*{Impacto del peso en el reparto de CPU}
+ 
+En la siguiente tabla ilustramos cómo el \textbf{WRR} redistribuye el tiempo cuando \texttt{task\_2} recibe un quantum elevado mientras las demás mantienen $q = 1$:
+ 
+\begin{table}[H]
+  \centering
+  \caption{Reparto de CPU con WRR: Tarea 2 priorizada ($N=4$ tareas activas)}
+  \begin{tabular}{cccc}
+    \textbf{Tarea} & \textbf{Peso ($q$)} & \textbf{Quantum} & \textbf{\% de CPU} \\
+    \hline
+    1 & 1 & 10\,ms & $\approx 12.5\%$ \\
+    2 & 5 & 50\,ms & $\approx 62.5\%$ \\
+    3 & 1 & 10\,ms & $\approx 12.5\%$ \\
+    4 & 1 & 10\,ms & $\approx 12.5\%$ \\
+  \end{tabular}
+\end{table}
+ 
+El resultado físico es que la animación de la tarea 2 se observa notablemente más fluida mientras las demás tareas se vuelven proporcionalmente más lentas, demostrando el control de prioridades en tiempo real.
+ 
+\newpage
+
+\section*{Diagrama de Flujo}
+ 
+El diagrama de flujo del sistema se divide en los tres hilos de ejecución independientes.
+ 
+\subsection*{Hilo 1 - Arranque y Bucle Idle (\texttt{main.c})}
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.97\textheight,keepaspectratio]{diagramaH1.png}
+\end{center}
+
+\newpage
+ 
+\subsection*{Hilo 2 - ISR del SysTick (cada 10\,ms)}
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.97\textheight,keepaspectratio]{diagramaH2.png}
+\end{center}
+
+\newpage
+
+\subsection*{Hilo 3 - Cambio de Contexto (\texttt{pendsv.s} + \texttt{schedule()})}
+
+\begin{center}
+  \includegraphics[width=\textwidth,height=0.97\textheight,keepaspectratio]{diagramaH3.png}
+\end{center}
+ 
+\newpage
+
+\section*{Conclusiones}
+ 
+\begin{enumerate}[label=\textbf{\arabic*.}]
+\item \textbf{El SysTick es la base del \texttt{preemptive multitask}.}
+  
+  Al sustituir el botón por el temporizador de hardware, mostramos que la preempción (no apropiación) automática es lo que convierte un secuenciador manual en un \textbf{sistema operativo} real, con interrupciones cada 10\,ms el Kernel recupera el control del CPU de forma periódica e independiente de la voluntad de las tareas (principio fundamental de todo planificador preemptivo).
+  
+\item \textbf{El TCB es la abstracción esencial del proceso.}
+  
+  Encapsular el apuntador de pila, el estado y el punto de entrada en una estructura unificada nos permitió tratar cada tarea como una entidad independiente y autosuficiente. La pre-carga del frame ficticio en \texttt{init\_task\_stack()} revela que el ``\textit{contexto inicial}'' de un proceso no difiere en estructura del contexto de uno interrumpido (el hardware no distingue entre ambos).
+  
+\item \textbf{El busy waiting es costoso en un entorno concurrente.}
+  
+  Los retardos implementados con \texttt{delay\_cycles\_exact()} consumen el quantum completo realizando trabajo nulo, ralentizando la ejecución de todas las tareas en un factor proporcional a $N$. Esto justifica por qué los \textbf{sistemas operativos} modernos implementan llamadas bloqueantes (\texttt{sleep}, \texttt{wait}) que liberan el CPU durante la espera.
+  
+\item \textbf{El Round Robin Ponderado permite priorización sin inanición.}
+  
+  Al asignar un quantum (o peso) $q_i$ mayor a la \texttt{Tarea 2} se puede observar físicamente que su animación se vuelve más fluida mientras las demás tareas recibían menos ciclos. El \textbf{RR ponderado} demostró garantizar que todas las tareas eventualmente se ejecutan (sin inanición).
+\end{enumerate}
+
+\end{document}

@@ -43,8 +43,8 @@ void task_create(int id, void (*entry_point)(void)) {
     tasks[id].entry_point = entry_point;
     tasks[id].state = DORMANT;
     //Default quantum
-    tasks[id].quantum = 1;
-    tasks[id].remaining = 1;
+    tasks[id].quantum = 1; //
+    tasks[id].remaining = 1; //
   }
 }
 
@@ -77,8 +77,8 @@ void isr_systick() {
 	}
       }
       //'q' command init
-      else if (c == 'q') {
-	printf("[Kernel] Peso > selecciona tarea (1-4): ");
+      else if (c == 'q' || c == 'Q') { //
+	printf("[Kernel] Quantum > selecciona tarea (1-4): "); //
 	cmd_state = 1;
       }
     }
@@ -86,16 +86,14 @@ void isr_systick() {
       //Waiting task id
       if (c >= '1' && c <= '4') {
 	cmd_task_id = c - '1';
-	printf("%c\n[Kernel] Peso > nuevo peso para tarea %d (1-9): ",
+	printf("%c\n[Kernel] Quantum > nuevo quantum para tarea %d (1-9): ",
 	       c, cmd_task_id + 1);
 	cmd_state = 2;
       } else {
 	printf("Cancelado.\n");
 	cmd_state = 0;
       }
-    }
-
-    else if (cmd_state == 2) {
+    } else if (cmd_state == 2) {
       //Waiting quantum id
       if (c >= '1' && c <= '9') {
 	uint8_t new_quantum = c - '0';
@@ -103,10 +101,10 @@ void isr_systick() {
 	//If task's running, update the quantum
 	if (tasks[cmd_task_id].state == RUNNING)
 	  tasks[cmd_task_id].remaining = new_quantum;
-	printf("%c\n[Kernel] Tarea %d -> peso=%d (%d ms/quantum).\n",
+	printf("%c\n[Kernel] Tarea %d -> quantum=%d (%d ms/quantum).\n",
 	       c, cmd_task_id + 1, new_quantum, new_quantum * 10);
       } else {
-	printf("Peso invalido, cancelado.\n");
+	printf("Quantum invalido, cancelado.\n");
       }
       cmd_state   = 0;
       cmd_task_id = -1;
@@ -134,6 +132,7 @@ void isr_systick() {
 void k_task_exit(void) {
   if (current_task != -1) {
     tasks[current_task].state = DORMANT;
+    //
     printf("Tarea %d terminada.\n", current_task + 1);
     // Force an immediate context switch
     *(volatile uint32_t *)0xE000ED04 = (1 << 28);
@@ -175,5 +174,6 @@ uint32_t schedule(uint32_t current_sp) {
   }
 
   // If no task is ready, keep the current context
-  return current_sp; 
+  //  return current_sp;
+  return 0; 
 }

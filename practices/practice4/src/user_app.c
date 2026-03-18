@@ -108,9 +108,9 @@ void task3_infinite(void)
   while (1)
     {
       sys_gpio_set(LED_1, 1);
-      delay_cycles_exact(41700000 / 40);
+      delay_cycles_exact(41700000);
       sys_gpio_set(LED_1, 0);
-      delay_cycles_exact(41700000 / 40);
+      delay_cycles_exact(41700000);
     }
 }
 
@@ -124,9 +124,9 @@ void task4_finite(void)
   for (int i = 0; i < 15; i++)
     {
       sys_gpio_set(LED_3, 1);
-      delay_cycles_exact(41700000 / 10);
+      delay_cycles_exact(41700000);
       sys_gpio_set(LED_3, 0);
-      delay_cycles_exact(41700000 / 10);
+      delay_cycles_exact(41700000);
     }
   //Life cycle completed, then we notify the Kernel this task finished
   sys_exit();

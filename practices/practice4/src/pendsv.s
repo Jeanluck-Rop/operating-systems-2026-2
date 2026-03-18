@@ -35,7 +35,7 @@ call_scheduler:
     @ El planificador nos devuelve el SP de la tarea entrante en r0.
     @ Si r0 sigue siendo 0, significa que la cola de procesos esta vacia.
     cmp r0, #0
-    beq return_idle
+    beq force_return_idle
 
     @ --- 4. PREPARAR EL RETORNO AL USUARIO ---
     @ Forzamos el EXC_RETURN a 0xFFFFFFFD para asegurarnos de que al salir
@@ -56,7 +56,14 @@ call_scheduler:
 
     @ --- 6. ACTUALIZAR HARDWARE Y SALIR ---
     msr psp, r0         @ Cargar el nuevo Process Stack Pointer al hardware
+    b return_idle
 
+force_return_idle:
+    @ Volvemos al idle loop en MSP cuando ya no hay mas tareas READY
+    movs r0, #0
+    msr psp, r0
+    ldr r3, =0xFFFFFFF9
+	
 return_idle:
     @ Si veniamos de main y seguimos sin tareas, r3 = 0xFFFFFFF9 (Sigue en MSP)
     @ Si se selecciono una tarea, r3 = 0xFFFFFFFD (Cambia a PSP)

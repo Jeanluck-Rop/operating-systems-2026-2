@@ -47,6 +47,40 @@
     emphstyle=\color{codeorg}\bfseries
 }
 
+% --- Estilo Assembly ---
+\lstdefinestyle{modernasm}{
+    language=Assembler,
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    numbers=left,
+    numbersep=5pt,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    morecomment=[l]{;},
+    morekeywords={
+        mov, add, sub, mul, div, inc, dec,
+        push, pop, call, ret,
+        cmp, jmp, je, jne, jg, jl, jge, jle,
+        and, or, xor, not,
+        lea, nop
+    },
+    emph={
+        eax, ebx, ecx, edx,
+        esi, edi, esp, ebp,
+        ax, bx, cx, dx,
+        rax, rbx, rcx, rdx,
+        rsi, rdi, rsp, rbp
+    },
+    emphstyle=\color{codeorg}\bfseries
+}
+
 \definecolor{linkblue}{HTML}{1A167A}
 
 \begin{document}
@@ -393,6 +427,45 @@ En la siguiente tabla ilustramos cómo el \textbf{WRR} redistribuye el tiempo cu
 \end{table}
  
 El resultado físico es que la animación de la tarea 2 se observa notablemente más fluida mientras las demás tareas se vuelven proporcionalmente más lentas, demostrando el control de prioridades en tiempo real.
+
+\subsection*{Retorno seguro a idle (\texttt{pendsv.s} + \texttt{schedule()})}
+
+Como nota adicional, en  la versión original del \textbf{PendSV} dependía del valor de \texttt{LR} guardado al entrar en la excepción para decidir si regresar al idle o a una tarea. Esto derivaba en un bug sutil, pues, cuando \texttt{k\_task\_exit()} dispara \textbf{PendSV} desde el contexto de la última tarea activa, el \texttt{EXC\_RETURN} guardado es \texttt{0xFFFFFFFD} (modo PSP), pero \texttt{schedule()} no encuentra ninguna tarea \texttt{READY} y devuelve~\texttt{0}. Sin la corrección, el hardware intentaba retornar al PSP de la tarea que acaba de morir, causando comportamiento indefinido; lo que en la placa se reflejaba como que ya no aceptaba más entrada de la terminal.\\
+
+La solución fue simplemente hacer que \texttt{schedule()} señalice explícitamente la ausencia de tareas con \texttt{return 0} y que \textbf{PendSV} lo maneje en una etiqueta dedicada:
+
+\begin{lstlisting}[style=modernc, caption={Señal de cola vacía en \texttt{schedule()}}]
+// If no task is ready: signal idle to PendSV
+return 0;
+\end{lstlisting}
+
+\begin{lstlisting}[style=modernasm, caption={Retorno determinista a idle en \texttt{pendsv.s} }]
+force_return_idle:
+    @Llegamos aqui cuando schedule() devuelve 0, que ninguna tarea esta en READY
+    @Sin importar quien activo PendSV, forzamos el estado consistente:
+    @    PSP = 0 y EXC_RETURN = 0xFFFFFFF9
+    movs r0, #0
+    msr psp, r0             @ Limpiar PSP, no hay tarea activa
+    ldr r3, =0xFFFFFFF9     @ EXC_RETURN, retornar a Thread mode usando MSP
+return_idle:
+    bx r3   @ Hardware restaura R0-R3, R12, LR, PC y xPSR automaticamente
+\end{lstlisting}
+
+Con este cambio el retorno al idle es \textbf{determinista}: no depende del contexto
+en que se disparó \textbf{PendSV}, sino exclusivamente de lo que \texttt{schedule()}
+decidió.
+
+\begin{table}[H]
+  \centering
+  \caption{Correspondencia entre el valor de retorno de \texttt{schedule()} y el
+           \texttt{EXC\_RETURN} usado por PendSV}
+  \begin{tabular}{ccc}
+    \textbf{Retorno de \texttt{schedule()}} & \textbf{EXC\_RETURN} & \textbf{Efecto} \\
+    \hline
+    \texttt{sp} de nueva tarea & \texttt{0xFFFFFFFD} & CPU usa PSP $\to$ tarea nueva \\
+    \texttt{0} (cola vacía)    & \texttt{0xFFFFFFF9} & CPU usa MSP $\to$ \texttt{WFI} idle \\
+  \end{tabular}
+\end{table}
  
 \newpage
 
@@ -423,6 +496,13 @@ El diagrama de flujo del sistema se divide en los tres hilos de ejecución indep
 \end{center}
  
 \newpage
+
+\section*{Evidencias}
+
+\href{https://drive.google.com/file/d/1GhABwlL2LnG-V2GR9w8u0qGLFRZ289V0/view?usp=drivesdk}
+     {\textbf{\textit{\textcolor{linkblue}{Evidencia Práctica 4 Video}}}}
+
+\bigskip
 
 \section*{Conclusiones}
  

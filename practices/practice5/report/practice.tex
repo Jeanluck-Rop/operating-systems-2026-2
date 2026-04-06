@@ -227,7 +227,7 @@ Desde el punto de vista del \textit{host}, el flujo de caracteres se detiene de 
 Podemos ver de nuevo, las evidencia a este \textbf{caso 2} en el siguiente video:\\
 
 \href{https://drive.google.com/file/d/1uVFFZONrw-ooMVKhCwuL4oLu651Wa1V4/view?usp=sharing&t=74}
-     {\textbf{\textit{\textcolor{linkblue}{Evidencia Práctica 5. Fase A: Caso 1}}}}
+     {\textbf{\textit{\textcolor{linkblue}{Evidencia Práctica 5. Fase A: Caso 2}}}}
 
 \newpage
 
@@ -322,15 +322,18 @@ void
 sys_semaphore_wait(semaphore_t *sem)
 {
   //Critical section: disable interrupts atomically
-  __asm volatile ("CPSID i");
+  uint32_t primask;
+  __asm volatile ("MRS %0, PRIMASK" : "=r"(primask));
+  __asm volatile ("CPSID i"); //defuse IRQs
+  
   if (sem->count > 0) {
-      //Resource available - take it and continue
-      sem->count--;
-      __asm volatile ("CPSIE i");
-      return;
+    //Resource available, we take it and continue without BLOCKING
+    sem->count--;
+    __asm volatile ("CPSIE i"); //refuse IRQs
+    return;
   }
 
-  //No resources available - block the current task
+  //No resources, BLOCK current task
   tasks[current_task].state = BLOCKED;
 
   //Enqueue the task ID in the semaphore's circular FIFO
@@ -338,10 +341,9 @@ sys_semaphore_wait(semaphore_t *sem)
   sem->tail = (sem->tail + 1) % MAX_TASKS;
   sem->size++;
 
-  //Re-enable interrupts before triggering PendSV
-  __asm volatile ("CPSIE i");
+  __asm volatile ("CPSIE i"); //Re-enable interrupts before triggering PendSV
 
-  //Yield the CPU
+  //Yield the CPU to scheduler
   //The resource is considered acquired at that point (count unchanged).
   trigger_pendsv();
 }
@@ -357,22 +359,25 @@ sys_semaphore_wait(semaphore_t *sem)
 void
 sys_semaphore_post(semaphore_t *sem)
 {
-  //Critical section
+  //Disable interrupts atomically
+  uint32_t primask;
+  __asm volatile ("MRS %0, PRIMASK" : "=r"(primask));
   __asm volatile ("CPSID i");
 
   if (sem->size > 0) {
-      //Wake the oldest waiting task
-      int woken_id = sem->queue[sem->head];
-      sem->queue[sem->head] = -1;
-      sem->head = (sem->head + 1) % MAX_TASKS;
-      sem->size--;
+    //Wake the oldest waiting task
+    int woken_id = sem->queue[sem->head];
+    sem->queue[sem->head] = -1;
+    sem->head = (sem->head + 1) % MAX_TASKS;
+    sem->size--;
 
-      //Transfer resource directly: BLOCKED -> READY
-      //count is NOT incremented - the resource passes hand-to-hand
-      tasks[woken_id].state = READY;
+    //Transfer resource directly, BLOCKED -> READY
+    //count is NOT incremented the resource passes directly
+    tasks[woken_id].state = READY;
+
   } else {
-      //Nobody waiting - return the resource to the semaphore
-      sem->count++;
+    //Nobody waiting, we return the resource to the semaphore
+    sem->count++;
   }
 
   __asm volatile ("CPSIE i");
@@ -388,31 +393,39 @@ La modificación correspondiente en \texttt{schedule()} garantiza que las tareas
 uint32_t
 schedule(uint32_t current_sp)
 {
+  // Save the SP of the task that was just paused
   if (current_task != -1 && tasks[current_task].state == RUNNING) {
-      tasks[current_task].sp    = (uint32_t *)current_sp;
-      tasks[current_task].state = READY;   // return to ready queue
+    tasks[current_task].sp = (uint32_t *)current_sp;
+    tasks[current_task].state = READY; // Put it back in the ready queue
   } else if (current_task != -1 && tasks[current_task].state == BLOCKED) {
-      // Save SP but do NOT change state - task stays BLOCKED
-      tasks[current_task].sp = (uint32_t *)current_sp;
+    //Keep SP but without changing its state, stays BLOCKED
+    tasks[current_task].sp = (uint32_t *)current_sp;
   }
 
-  //Round Robin: skip DORMANT and BLOCKED tasks
+  // Round Robin algorithm
   int next_task = current_task;
-  int tries     = 0;
-  do {
-      next_task = (next_task + 1) % MAX_TASKS;
-      tries++;
-      if (tasks[next_task].state == READY) break;
-  } while (tries < MAX_TASKS);
+  int tries = 0;
 
+  do {
+    next_task = (next_task + 1) % MAX_TASKS;
+    tries++;
+    // If we find a ready task, stop searching
+    if (tasks[next_task].state == READY)
+      break;
+  } while (tries < MAX_TASKS);
+  
+  // If a runnable task was found
   if (tasks[next_task].state == READY) {
-      current_task = next_task;
-      tasks[current_task].state     = RUNNING;
-      tasks[current_task].remaining = tasks[current_task].quantum;
-      return (uint32_t)tasks[current_task].sp;
+    current_task = next_task;
+    tasks[current_task].state = RUNNING;
+    //Reaload quantum with the income one
+    tasks[current_task].remaining = tasks[current_task].quantum;
+    return (uint32_t)tasks[current_task].sp;
   }
 
-  return 0; //No runnable task
+  // If no task is ready, keep the current context
+  //  return current_sp;
+  return 0; 
 }
 \end{lstlisting}
 
@@ -433,14 +446,14 @@ task_subsystem1(void)
 {
   sys_gpio_dir(LED_0, 1);
   while (1) {
-      // --- Thermal heater phase ---
+      // Thermal heater phase
       sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
       sys_gpio_set(LED_0, 1);           //heater ON
       delay_cycles_exact(DELAY_500MS);  //500 ms warm-up
       sys_gpio_set(LED_0, 0);           //heater OFF
       sys_semaphore_post(&sem_energia); //release energy slot
 
-      // --- Telemetry report phase ---
+      // Telemetry report phase
       sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
       printf("[1st SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
       sys_semaphore_post(&sem_radio); //release UART channel

@@ -52,19 +52,19 @@ task_subsystem1(void)
   sys_gpio_dir(LED_0, 1);
 
   while (1) {
-    sys_semaphore_wait(&sem_energia);   // adquiere slot de energía
+    sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
     
     sys_gpio_set(LED_0, 1);
     delay_cycles_exact(DELAY_500MS);
     sys_gpio_set(LED_0, 0);
 
-    sys_semaphore_post(&sem_energia);   // libera slot de energía
+    sys_semaphore_post(&sem_energia); //release energy slot
  
-    sys_semaphore_wait(&sem_radio);     // adquiere canal UART
+    sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
 
     printf("[1st SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
     
-    sys_semaphore_post(&sem_radio);     // libera canal UART
+    sys_semaphore_post(&sem_radio); //release UART channel
   }
 }
 
@@ -75,19 +75,19 @@ task_subsystem2(void)
   sys_gpio_dir(LED_1, 1);
 
   while (1) {
-    sys_semaphore_wait(&sem_energia);   // adquiere slot de energía
+    sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
 	
     sys_gpio_set(LED_1, 1);
     delay_cycles_exact(DELAY_500MS);
     sys_gpio_set(LED_1, 0);
 
-    sys_semaphore_post(&sem_energia);   // libera slot de energía
+    sys_semaphore_post(&sem_energia); //release energy slot
 
-    sys_semaphore_wait(&sem_radio);     // adquiere canal UART
+    sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
 	
     printf("[2nd SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
     
-    sys_semaphore_post(&sem_radio);     // libera canal UART
+    sys_semaphore_post(&sem_radio); //release UART channel
   }
 }
 
@@ -98,19 +98,19 @@ task_subsystem3(void)
   sys_gpio_dir(LED_2, 1);
 
   while (1) {
-    sys_semaphore_wait(&sem_energia);   // adquiere slot de energía
+    sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
 	
     sys_gpio_set(LED_2, 1);
     delay_cycles_exact(DELAY_500MS);
     sys_gpio_set(LED_2, 0);
 
-    sys_semaphore_post(&sem_energia);   // libera slot de energía
+    sys_semaphore_post(&sem_energia); //release energy slot
 
-    sys_semaphore_wait(&sem_radio);     // adquiere canal UART
+    sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
 	
     printf("[3rd SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
     
-    sys_semaphore_post(&sem_radio);     // libera canal UART
+    sys_semaphore_post(&sem_radio); //release UART channel
   }
 }
 
@@ -121,19 +121,19 @@ task_subsystem4(void)
   sys_gpio_dir(LED_3, 1);
 
   while (1) {
-    sys_semaphore_wait(&sem_energia);   // adquiere slot de energía
+    sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
 	
     sys_gpio_set(LED_3, 1);
     delay_cycles_exact(DELAY_500MS);
     sys_gpio_set(LED_3, 0);
 
-    sys_semaphore_post(&sem_energia);   // libera slot de energía
+    sys_semaphore_post(&sem_energia); //release energy slot
 
-    sys_semaphore_wait(&sem_radio);     // adquiere canal UART
+    sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
 	
     printf("[4th SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
     
-    sys_semaphore_post(&sem_radio);     // libera canal UART
+    sys_semaphore_post(&sem_radio); //release UART channel
   }
 }
 
@@ -144,19 +144,19 @@ task_subsystem5(void)
   sys_gpio_dir(LED_4, 1);
 
   while (1) {
-    sys_semaphore_wait(&sem_energia);   // adquiere slot de energía
+    sys_semaphore_wait(&sem_energia); //acquire energy slot (max 3)
 	
     sys_gpio_set(LED_4, 1);
     delay_cycles_exact(DELAY_500MS);
     sys_gpio_set(LED_4, 0);
 
-    sys_semaphore_post(&sem_energia);   // libera slot de energía
+    sys_semaphore_post(&sem_energia); //release energy slot
 
-    sys_semaphore_wait(&sem_radio);     // adquiere canal UART
+    sys_semaphore_wait(&sem_radio); //acquire UART channel (mutex)
 	
     printf("[5th SUBSYSTEM]: Calentamiento finalizado. Operacion nominal alcanzada. Transfiriendo paquetes de telemetria y reportando estado actual a base terrestre...\n");
     
-    sys_semaphore_post(&sem_radio);     // libera canal UART
+    sys_semaphore_post(&sem_radio); //release UART channel
   }
 }
 

@@ -85,63 +85,62 @@ semaphore_init(semaphore_t *sem,
 void
 sys_semaphore_wait(semaphore_t *sem)
 {
-  // Sección crítica: disable interruptions briefly
+  //Critical section: disable interrupts atomically
   uint32_t primask;
   __asm volatile ("MRS %0, PRIMASK" : "=r"(primask));
   __asm volatile ("CPSID i"); //defuse IRQs
   
   if (sem->count > 0) {
-    // Source available, take it and continue without BLOCKING
+    //Resource available, we take it and continue without BLOCKING
     sem->count--;
-    __asm volatile ("CPSIE i");  //refuse IRQs
+    __asm volatile ("CPSIE i"); //refuse IRQs
     return;
   }
 
-  // No resources: BLOCK current task
+  //No resources, BLOCK current task
   tasks[current_task].state = BLOCKED;
 
-  // Queue el ID de la tarea (cola circular FIFO)
+  //Enqueue the task ID in the semaphore's circular FIFO
   sem->queue[sem->tail] = current_task;
   sem->tail = (sem->tail + 1) % MAX_TASKS;
   sem->size++;
 
-  __asm volatile ("CPSIE i");        // Rehabilitar IRQs antes del PendSV
+  __asm volatile ("CPSIE i"); //Re-enable interrupts before triggering PendSV
 
-  // Ceder el CPU al scheduler — la tarea no avanza hasta ser desbloqueada
+  //Yield the CPU to scheduler
+  //The resource is considered acquired at that point (count unchanged).
   trigger_pendsv();
-
-  // Cuando la tarea se reanude (sem_post la despertó), llegará aquí.
-  // El recurso ya fue "tomado" por sem_post, así que simplemente retornamos.
 }
 
 /**
- * @brief Libera un recurso del semáforo.
+ * @brief Release one resource back to the semaphore.
  *
- *  - Si hay tareas bloqueadas esperando: desbloquea la primera (FIFO).
- *    El contador NO se incrementa porque el recurso pasa directamente.
- *  - Si no hay nadie esperando: incrementa el contador.
+ * - If tasks are waiting:
+ *     wake the first one (FIFO) and transfer the resource directly (count stays the same).
+ * - If nobody is waiting:
+ *     increment count.
  */
 void
 sys_semaphore_post(semaphore_t *sem)
 {
-  // Sección crítica
+  //Disable interrupts atomically
   uint32_t primask;
   __asm volatile ("MRS %0, PRIMASK" : "=r"(primask));
   __asm volatile ("CPSID i");
 
   if (sem->size > 0) {
-    // Hay tareas esperando — despertar la primera de la cola
+    //Wake the oldest waiting task
     int woken_id = sem->queue[sem->head];
     sem->queue[sem->head] = -1;
     sem->head = (sem->head + 1) % MAX_TASKS;
     sem->size--;
 
-    // Desbloquear: BLOCKED → READY
-    // El recurso se transfiere directamente (count queda igual)
+    //Transfer resource directly, BLOCKED -> READY
+    //count is NOT incremented the resource passes directly
     tasks[woken_id].state = READY;
 
   } else {
-    // Nadie esperando — devolver el recurso al semáforo
+    //Nobody waiting, we return the resource to the semaphore
     sem->count++;
   }
 
@@ -243,13 +242,15 @@ void k_task_exit(void) {
  * @param current_sp Stack pointer of the task being switched out.
  * @return Stack pointer of the selected task, or current_sp if none is ready.
  */
-uint32_t schedule(uint32_t current_sp) {
+uint32_t
+schedule(uint32_t current_sp)
+{
   // Save the SP of the task that was just paused
   if (current_task != -1 && tasks[current_task].state == RUNNING) {
     tasks[current_task].sp = (uint32_t *)current_sp;
     tasks[current_task].state = READY; // Put it back in the ready queue
   } else if (current_task != -1 && tasks[current_task].state == BLOCKED) {
-    // Keep SP but without changin state, still BLOCKED
+    //Keep SP but without changing its state, stays BLOCKED
     tasks[current_task].sp = (uint32_t *)current_sp;
   }
 

@@ -1,0 +1,391 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+
+\usepackage{mdframed, enumitem}
+\usepackage{geometry, amsmath, amssymb}
+\usepackage{tcolorbox, graphicx, xcolor}
+\usepackage{titlesec, fancyhdr}
+\usepackage{booktabs, array, enumitem, mdframed}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{
+  left=2.5cm, right=2.5cm,
+  top=3cm,    bottom=3cm
+}
+
+\definecolor{azuloscuro}{RGB}{13, 71, 161}
+\definecolor{azulclaro}{RGB}{227, 242, 253}
+\definecolor{grisclaro}{RGB}{245, 245, 245}
+\definecolor{naranja}{RGB}{230, 81, 0}
+\definecolor{naranjafondo}{RGB}{255, 243, 224}
+\definecolor{verde}{RGB}{27, 94, 32}
+\definecolor{verdefondo}{RGB}{232, 245, 233}
+\definecolor{rojofondo}{RGB}{255, 235, 238}
+\definecolor{rojo}{RGB}{183, 28, 28}
+\definecolor{moradofondo}{RGB}{243, 229, 245}
+\definecolor{morado}{RGB}{106, 27, 154}
+
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{graybox}{HTML}{F4F4F4}
+\definecolor{accentblue}{HTML}{1A167A}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{azuloscuro}{\textbf{Sistemas Operativos}}}
+\fancyhead[R]{\small\textcolor{azuloscuro}{Sistemas de Archivos}}
+\fancyfoot[C]{\small\textcolor{gray}{\thepage}}
+\renewcommand{\headrulewidth}{0.6pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{azuloscuro}\leaders\hrule height \headrulewidth\hfill}}
+
+\titleformat{\section}[block]
+  {\large\bfseries\color{azuloscuro}}
+  {\thesection.}{0.5em}{}
+  [\vspace{-0.3em}\textcolor{azuloscuro}{\rule{\linewidth}{0.6pt}}]
+
+\begin{document}
+
+\input{portada}
+
+\newpage
+
+\section*{Ejercicio 4.}
+
+\begin{quote}
+  \textit{¿Es la llamada al sistema \texttt{open} en UNIX absolutamente esencial? ¿Cuáles serían las
+    consecuencias de no tenerla?}
+\end{quote}
+
+\bigskip
+
+\noindent
+La llamada al sistema \texttt{open()} recibe una ruta de archivo como argumento y devuelve un entero conocido
+como \textbf{descriptor de archivo} (\textit{file descriptor}, FD). A partir de ese momento, todas las
+operaciones de lectura, escritura y posicionamiento se realizan a través de dicho número entero, no a través de
+la ruta original \cite{tanenbaum2015}. Internamente, el sistema operativo resuelve la ruta una sola vez, verifica
+los permisos del proceso y crea una entrada en la \textit{tabla de archivos abiertos} del kernel que registra,
+entre otros datos, la posición actual de lectura/escritura (\textit{offset}).\\
+
+\noindent
+Técnicamente, un sistema operativo \emph{podría} funcionar sin \texttt{open}, en lugar de obtener un descriptor,
+cada llamada a \texttt{read} o \texttt{write} recibiría la ruta completa del archivo como parámetro. Sin embargo,
+esto transformaría el sistema en uno \textbf{sin estado} (\textit{stateless}) respecto a los archivos abiertos,
+con consecuencias graves:
+
+\begin{enumerate}[leftmargin=1.5cm, label=\textbf{\arabic*.}]
+\item \textbf{Colapso en el rendimiento por resolución repetida de rutas.}
+  La traducción de una ruta textual como \texttt{/usr/ast/courses/os/handout.t} hacia la dirección física en
+  disco implica recorrer cada componente del directorio, leer su bloque correspondiente e interpretar su $i$-nodo
+  \cite{tanenbaum2015}. Con \texttt{open}, este proceso ocurre una sola vez; sin él, debería repetirse en cada
+  llamada a \texttt{read} o \texttt{write}, incrementando drásticamente la cantidad de operaciones de E/S y
+  degradando el rendimiento del sistema.
+  
+\item \textbf{Verificaciones de seguridad redundantes.}
+  UNIX comprueba si el proceso tiene permiso para acceder al archivo en el momento en que se ejecuta
+  \texttt{open}. Si esta llamada no existiera, el kernel debería verificar los permisos del proceso en cada
+  operación individual de lectura o escritura, multiplicando el costo computacional de las comprobaciones de
+  control de acceso \cite{silberschatz2018}.
+  
+\item \textbf{Pérdida del apuntador de posición (\textit{offset}).}
+  El estado creado por \texttt{open} permite que el sistema operativo mantenga el \textit{offset} en la tabla de
+  archivos abiertos, recordando en qué byte se quedó la última lectura. Sin este estado persistente en el kernel,
+  el proceso tendría que especificar explícitamente la posición de inicio en cada llamada, trasladando al
+  programador la responsabilidad de llevar la cuenta exacta, lo cual es ineficiente y propenso a errores
+  \cite{tanenbaum2015}.
+  
+\item \textbf{Ruptura de la filosofía \guillemotleft{}todo es un archivo\guillemotright{}.}
+  La abstracción más influyente de UNIX es permitir que dispositivos de hardware, tuberías (\textit{pipes}) y
+  conexiones de red (\textit{sockets}) se manejen con la misma simplicidad que un archivo de texto
+  \cite{ritchie1974}. Esta unificación depende de "abrir" el recurso y obtener un descriptor unificado.
+  Sin \texttt{open}, sería imposible aplicar llamadas genéricas de lectura/escritura a recursos sin rutas de
+  disco duras, destruyendo la modularidad del sistema.
+\end{enumerate}
+
+\begin{mdframed}[backgroundcolor=graybox, linecolor=accentblue, linewidth=1pt, roundcorner=4pt]
+  \textbf{Analogía ilustrativa.} Eliminar \texttt{open} sería equivalente a un hotel que no entrega llaves, cada
+  vez que un huésped desea acceder a su habitación, debe ir a recepción, presentar su documentación, esperar a
+  que el personal verifique la reserva y ser escoltado hasta la puerta. La estancia funciona, pero la recepción
+  colapsaría en minutos ante la demanda concurrente de múltiples huéspedes.
+\end{mdframed}
+
+\medskip
+
+\noindent
+En conclusión, no es lógicamente indispensable para que una computadora funcione, pero es arquitectónicamente
+esencial para el modelo de UNIX. Aunque en teoría un sistema podría operar sin \texttt{open}, en la práctica su
+ausencia haría que el sistema operativo fuera significativamente más lento, menos seguro y radicalmente más
+difícil de programar. La llamada \texttt{open} es arquitectónicamente esencial para mantener la eficiencia y la
+elegancia del modelo de E/S en UNIX.
+
+\newpage
+
+\section*{Ejercicio 17.}
+
+\begin{quote}
+  \textit{Para una clase determinada, los registros de los estudiantes se almacenan en un archivo. Los registros
+    son accedidos y actualizados de forma aleatoria. Se asume que el registro de cada estudiante tiene un tamaño
+    fijo. ¿Cuál de los tres esquemas de asignación (contigua, enlazada e indexada/tabla) sería el más apropiado?}
+\end{quote}
+
+\bigskip
+
+\subsection*{Los tres esquemas de asignación}
+\noindent
+Antes de elegir el esquema más adecuado, conviene comprender las características fundamentales de cada uno
+\cite{tanenbaum2015,silberschatz2018}:
+
+\begin{enumerate}[leftmargin=1.5cm, label=\textbf{\arabic*.}]
+\item \textbf{Asignación contigua.}
+  Los bloques de un archivo se almacenan en posiciones consecutivas del disco. Para acceder al bloque $n$ de un
+  archivo que comienza en el bloque $b$, el sistema operativo calcula directamente $b + n$. Esto hace que el
+  acceso aleatorio sea $O(1)$, conociendo el tamaño fijo del registro y su número de orden, se puede calcular la
+  dirección exacta en disco sin necesidad de recorrer ninguna estructura auxiliar. Su principal debilidad es la
+  \textbf{fragmentación externa} y la dificultad para expandir el archivo si no hay bloques contiguos adyacentes
+  disponibles.
+  
+\item \textbf{Asignación enlazada.}
+  Cada bloque contiene un apuntador al siguiente bloque de la cadena. El acceso es secuencial por naturaleza,
+  para leer el registro número $n$, es necesario recorrer los $n-1$ bloques anteriores, siguiendo cada apuntador.
+  Esto lo hace \emph{totalmente inadecuado para acceso aleatorio}, pues el tiempo de acceso en disco crece
+  linealmente con la posición del registro ($O(n)$).
+  
+\item \textbf{Asignación indexada (i-nodo / FAT).}
+  Se mantiene una estructura índice que contiene las direcciones de todos los bloques del archivo. Para acceder
+  al bloque $n$, se consulta la entrada $n$ del índice y se obtiene la dirección directamente, el acceso
+  aleatorio es posible, pero requiere un \textbf{overhead de Entrada/Salida}: una lectura en disco para el bloque
+  índice más una lectura para el bloque de datos. No hay fragmentación externa y el archivo puede expandirse
+  fácilmente \cite{tanenbaum2015}.
+\end{enumerate}
+
+\medskip
+
+\subsection*{Comparativa resumida}
+\begin{center}
+  \renewcommand{\arraystretch}{1.4}
+  \begin{tabular}{>{\bfseries}l|c|c|c|}
+    \hline
+    Criterio & Contigua & Enlazada & Indexada \\
+    \hline
+    Acceso aleatorio eficiente & \textcolor{green!50!black}{\checkmark} (1 I/O) & \textcolor{red}{\texttimes} ($n$ I/O) & \textcolor{green!50!black}{\checkmark} (2 I/O) \\
+    Sin fragmentación externa   & \textcolor{red}{\texttimes} & \textcolor{green!50!black}{\checkmark} & \textcolor{green!50!black}{\checkmark} \\
+    Expansión fácil del archivo & \textcolor{red}{\texttimes} & \textcolor{green!50!black}{\checkmark} & \textcolor{green!50!black}{\checkmark} \\
+    Overhead de almacenamiento & Ninguno & Apuntadores/bloque & Tabla o i-nodo \\
+    \hline
+  \end{tabular}
+\end{center}
+
+\medskip
+
+\subsection*{Elección más apropiada: Asignación Contigua}
+\noindent
+Bajo las restricciones literales del enunciado, la \textbf{asignación contigua} es indiscutiblemente la más
+apropiada. Los argumentos técnicos son los siguientes:
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \textbf{Cálculo directo (Overhead cero):} Al tener registros de tamaño fijo, la dirección física de
+  cualquier registro se calcula mediante aritmética simple:
+  $\text{Dirección Base} + (\text{Número de Registro} \times \text{Tamaño del Registro})$. El sistema puede
+  saltar al bloque exacto y realizar la actualización en una sola operación de disco.
+
+\item \textbf{Desempeño sobre la asignación indexada:} Aunque la asignación indexada permite acceso aleatorio,
+  introduce una penalización de rendimiento (\textit{overhead}). Por cada actualización, el sistema tendría que
+  leer primero el bloque índice y luego acceder al bloque de datos (dos operaciones de E/S). Dado que la
+  matemática contigua resuelve el acceso directo por sí sola, el uso de un índice aquí es redundante y menos
+  eficiente en tiempo.
+
+\item \textbf{Ineficiencia de la asignación enlazada:} La necesidad de "acceso y actualización aleatoria"
+  descarta inmediatamente la asignación enlazada debido al costo prohibitivo de recorrer la cadena de bloques
+  uno por uno para cada consulta.
+\end{itemize}
+
+\noindent
+\textbf{Nota de diseño (consideración del mundo real):}\\
+La respuesta óptima asume que el conjunto de estudiantes es estático, como sugiere el problema ("se asumen de
+tamaño fijo" y solo menciona "accedidos y actualizados"). Si en un escenario práctico el diseño requiriera que
+la base de datos creciera dinámicamente con nuevas inscripciones de estudiantes de forma constante, la
+\textbf{asignación indexada} se volvería la opción más robusta para evitar tener que reubicar el archivo entero
+en el disco debido a la falta de bloques contiguos \cite{silberschatz2018}. No obstante, para acceso puro
+aleatorio en un espacio predefinido, la contigua no tiene rival en velocidad.
+
+\newpage
+
+\section*{Ejercicio 24.}
+
+\begin{quote}
+  \textit{El espacio libre en disco puede rastrearse usando una lista libre o un mapa de bits. Las direcciones de
+    disco requieren $D$ bits. Para un disco con $B$ bloques, de los cuales $F$ están libres, establezca la
+    condición bajo la cual la lista libre ocupa menos espacio que el mapa de bits. Para $D = 16$ bits, exprese
+    su respuesta como un porcentaje del espacio en disco que debe estar libre.}
+\end{quote}
+  
+\bigskip
+
+\subsection*{Estructuras de rastreo de espacio libre}
+\noindent
+El sistema operativo necesita saber qué bloques del disco están disponibles para ser asignados.
+Existen dos estrategias clásicas \cite{tanenbaum2015,silberschatz2018}:
+
+\begin{enumerate}[leftmargin=1.5cm, label=\textbf{\arabic*.}]
+\item \textbf{Mapa de bits (\textit{bitmap}).}
+  Se reserva un arreglo de $B$ bits, uno por cada bloque del disco. Si el bit $i$ vale 1, el bloque $i$ está
+  libre; si vale 0, está ocupado (o viceversa, según la convención del sistema). El mapa de bits ocupa
+  exactamente:
+  \[
+  \text{Espacio}_{\text{bitmap}} = B \text{ bits}
+  \]
+  Su principal característica es que \textbf{su tamaño es estrictamente constante}, independientemente de la
+  cantidad de bloques libres u ocupados en el disco.
+  
+\item \textbf{Lista libre (\textit{free list}).}
+  Se mantiene una lista (usualmente enlazada o en bloques agrupados) de las direcciones de los bloques libres.
+  Cada entrada almacena la dirección de un bloque libre, lo que requiere $D$ bits por entrada, con $F$ bloques
+  libres, el espacio total ocupado por los datos de la lista es:
+  \[
+  \text{Espacio}_{\text{lista}} = F \times D \text{ bits}
+  \]
+  A diferencia del mapa de bits, el tamaño de esta estructura es \textbf{dinámico}, es muy compacta cuando el
+  disco está casi lleno (el valor de $F$ es pequeño), pero crece linealmente a medida que se libera espacio.
+\end{enumerate}
+
+\subsection*{Condición general}
+\noindent
+La lista libre ocupa menos espacio que el mapa de bits cuando el costo de almacenar las direcciones completas es
+menor que el costo de tener un bit por cada bloque del disco:
+\[
+F \times D < B
+\]
+
+\noindent
+Despejando la fracción de bloques libres ($F/B$):
+\[
+\frac{F}{B} < \frac{1}{D}
+\]
+
+\noindent
+Es decir, la lista libre es preferible en espacio siempre que la proporción de bloques libres sea menor a
+$\dfrac{1}{D}$.
+
+\subsection*{Caso particular: $D = 16$ bits}
+\noindent
+Sustituyendo $D = 16$:
+\[
+\frac{F}{B} < \frac{1}{16} = 0.0625
+\]
+
+\begin{mdframed}[backgroundcolor=graybox, linecolor=accentblue, linewidth=1pt, roundcorner=4pt]
+  \textbf{Conclusión.} Con direcciones de 16 bits, la lista libre ocupa menos espacio que el mapa de bits
+  únicamente cuando menos del $6.25\%$ del disco está libre. En cualquier otro caso (disco con más del $6.25\%$
+  de espacio libre), el mapa de bits es más eficiente en almacenamiento. En la práctica, los usuarios rara vez
+  operan sus discos a más del $93\%$ de su capacidad de forma sostenida, lo que explica por qué el mapa de bits
+  (o variantes estructuradas en árboles) es la estructura preferida en los sistemas de archivos modernos
+  \cite{tanenbaum2015}.
+\end{mdframed}
+
+\subsection*{Interpretación intuitiva}
+\noindent
+Cada entrada en la lista libre ``cuesta'' 16 bits, mientras que en el mapa de bits cada bloque cuesta exactamente
+1 bit. La lista libre solo es ventajosa cuando hay tan pocos bloques libres que el ahorro de no representar los
+bloques ocupados compensa el costo inflado (16 veces mayor) de registrar explícitamente cada bloque libre
+restante.
+
+\newpage
+
+\section*{Ejercicio 43.}
+
+\begin{quote}
+  \textit{¿Cuántas operaciones de disco son necesarias para obtener el i-nodo de un archivo con la ruta
+    \texttt{/usr/ast/courses/os/handout.t}? Se asume que el i-nodo del directorio raíz está en memoria, pero
+    ningún otro elemento de la ruta lo está. También se asume que todos los directorios caben en un solo bloque
+    de disco.}
+\end{quote}
+
+\bigskip
+
+\subsection*{Contexto: resolución de rutas e i-nodos}
+\noindent
+En UNIX, cada archivo y directorio está descrito por una estructura llamada \textbf{i-nodo}
+(\textit{index node}), que contiene los metadatos del archivo (permisos, tamaño, marcas de tiempo) y las
+direcciones físicas de sus bloques de datos \cite{tanenbaum2015}. Para localizar un archivo a partir de su ruta
+absoluta, el sistema operativo debe \textbf{descender el árbol de directorios} nivel a nivel. En cada nivel,
+realiza dos operaciones fundamentales de Entrada/Salida (E/S):
+
+\begin{enumerate}[leftmargin=1.5cm, label=\textbf{\arabic*.}]
+\item Leer el \textbf{bloque de datos del directorio padre} actual. Un directorio no es más que un archivo que
+  contiene una tabla con pares de \texttt{(nombre\_de\_archivo, número\_de\_i-nodo)}. El sistema busca aquí el
+  nombre del siguiente componente de la ruta.
+  
+\item Leer el \textbf{i-nodo} correspondiente a ese número recién encontrado, trayéndolo desde el disco hacia la
+  memoria.
+\end{enumerate}
+
+\noindent
+Cada una de estas lecturas constituye una operación de disco independiente.
+
+\subsection*{Análisis paso a paso}
+\noindent
+La ruta a resolver es: \texttt{/usr/ast/courses/os/handout.t}\\
+
+\noindent
+El i-nodo de \texttt{/} (raíz) ya está cargado en la memoria RAM, por lo que su obtención inicial genera cero
+operaciones de disco. A partir de ahí, el sistema debe descender por 5 niveles:
+
+\begin{center}
+  \renewcommand{\arraystretch}{1.5}
+  \begin{tabular}{c >{\ttfamily}l p{7cm} c}
+    \toprule
+    \textbf{Paso} & \textbf{Nivel} & \textbf{Operación de I/O en Disco} & \textbf{Lecturas} \\
+    \midrule
+    1  & usr       & Leer bloque de datos de \texttt{/} (buscando "usr")         & 1 \\
+    2  & usr       & Leer i-nodo de \texttt{usr}                                  & 1 \\
+    3  & ast       & Leer bloque de datos de \texttt{usr} (buscando "ast")        & 1 \\
+    4  & ast       & Leer i-nodo de \texttt{ast}                                  & 1 \\
+    5  & courses   & Leer bloque de datos de \texttt{ast} (buscando "courses")    & 1 \\
+    6  & courses   & Leer i-nodo de \texttt{courses}                              & 1 \\
+    7  & os        & Leer bloque de datos de \texttt{courses} (buscando "os")     & 1 \\
+    8  & os        & Leer i-nodo de \texttt{os}                                   & 1 \\
+    9  & handout.t & Leer bloque de datos de \texttt{os} (buscando "handout.t")   & 1 \\
+    10 & handout.t & Leer i-nodo de \texttt{handout.t} (¡Archivo localizado!)     & 1 \\
+    \midrule
+    \multicolumn{3}{r}{\textbf{Total}} & \textbf{10} \\
+    \bottomrule
+  \end{tabular}
+\end{center}
+
+\subsection*{Fórmula general}
+\noindent
+Para una ruta absoluta con $n$ componentes (sin contar la raíz), asumiendo que el i-nodo de la raíz ya reside en
+memoria y que cada directorio ocupa un solo bloque:
+\[
+\text{Operaciones de disco} = 2 \times n
+\]
+
+\noindent
+En este caso particular de la ruta propuesta, tenemos $n = 5$ componentes, por lo tanto:
+\[
+\text{Operaciones de disco} = 2 \times 5 = \mathbf{10}
+\]
+
+\begin{mdframed}[backgroundcolor=graybox, linecolor=accentblue, linewidth=1pt, roundcorner=4pt]
+  \textbf{Conclusión.} Se requieren estrictamente \textbf{10 operaciones de disco} para obtener el i-nodo final
+  de \texttt{handout.t}. Este ejercicio teórico ilustra el altísimo costo computacional de la resolución de rutas
+  en UNIX y motiva la existencia arquitectónica de las cachés de i-nodos (\textit{inode cache}) y de entradas de
+  directorio (\textit{dentry cache}) en el kernel. En sistemas reales modernos, tras un primer acceso, estas
+  estructuras se mantienen en RAM, reduciendo los accesos a disco repetidos de 10 a 0.
+\end{mdframed}
+
+\bigskip
+\bigskip
+
+\begin{thebibliography}{9}
+\bibitem{tanenbaum2015}
+  Tanenbaum, A. S., \& Bos, H. (2015). \textit{Modern Operating Systems} (4th ed.). Pearson Education.
+\bibitem{silberschatz2018}
+  Silberschatz, A., Galvin, P. B., \& Gagne, G. (2018). \textit{Operating System Concepts} (10th ed.). John Wiley \& Sons.
+\bibitem{ritchie1974}
+  Ritchie, D. M., \& Thompson, K. (1974). The UNIX time-sharing system. \textit{Communications of the ACM}, 17(7), 365--375. \url{https://doi.org/10.1145/361011.361061}
+\end{thebibliography}
+
+\end{document}

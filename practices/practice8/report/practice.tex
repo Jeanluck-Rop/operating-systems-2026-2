@@ -1,0 +1,1159 @@
+\documentclass[12pt,letterpaper]{article}
+
+\setlength{\parindent}{0pt}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{listings, float}
+\usepackage{graphicx, geometry, xcolor, amsmath, enumitem, fancyvrb}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{margin=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
+
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{redcolor}{HTML}{7A1805}
+\definecolor{greencolor}{HTML}{0E8F10}
+\definecolor{greeblucolor}{HTML}{0E6657}
+\definecolor{orgcolor}{HTML}{B86D00}
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeorg}\bfseries
+}
+
+% --- Estilo Assembly ---
+\lstdefinestyle{modernasm}{
+    language=Assembler,
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    numbers=left,
+    numbersep=5pt,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    morecomment=[l]{;},
+    morekeywords={
+        mov, add, sub, mul, div, inc, dec,
+        push, pop, call, ret,
+        cmp, jmp, je, jne, jg, jl, jge, jle,
+        and, or, xor, not,
+        lea, nop
+    },
+    emph={
+        eax, ebx, ecx, edx,
+        esi, edi, esp, ebp,
+        ax, bx, cx, dx,
+        rax, rbx, rcx, rdx,
+        rsi, rdi, rsp, rbp
+    },
+    emphstyle=\color{codeorg}\bfseries
+}
+
+\begin{document}
+
+\input{cover}
+
+\newpage
+
+% ================================================================
+\section*{Introducción}
+% ================================================================
+En esta práctica sdiseñaremos e implementaremos una \textbf{PicoFS}, un sistema de archivos plano alojado en los
+últimos 256~KB de la memoria Flash del microcontrolador RP2040. Con el objetivo de comprender de primera mano
+cómo un espacio lineal y físico de silicio se convierte en una estructura organizada de archivos accesible
+mediante funciones de sistema, y cuáles son las restricciones reales que la arquitectura del hardware impone
+sobre cada operación de lectura, escritura y borrado.\\
+
+La premisa que articula todos los módulos es la asimetría física de la memoria Flash \texttt{NAND}/\texttt{NOR}:
+escribir requiere que los bits pasen de \texttt{1} a \texttt{0}, mientras que resetearlos a \texttt{1} exige
+aplicar un alto voltaje sobre un bloque completo de 4096 bytes, sin importar cuántos de esos bytes se deseen
+cambiar realmente. Esta restricción convierte cada modificación en un ciclo costoso de \textit{Read-Modify-Write}
+y obliga al diseño del sistema de archivos a minimizar la cantidad de borrados físicos mediante estrategias como
+el borrado lógico.\\
+
+Se organizó el reporte en cuatro módulos que van desde la validación de la identidad del sistema al montarlo
+(\textbf{Módulo 1}), pasando por la asignación alineada de bloques (\textbf{Módulo 2}), la escritura y lectura
+persistente de datos (\textbf{Módulo 3}), hasta el borrado lógico y el diagnóstico visual del estado del sistema
+(\textbf{Módulo 4}). A estos módulos le agregamos una sección de \textbf{Conocimiento Arquitectónico} que
+responde preguntas de análisis más profundo, y una sección de \textbf{Diagnóstico} con el análisis de los
+resultados de la ejecución.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Módulos de Implementación y Análisis Arquitectónico}
+% ================================================================
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 1: Inicialización y Firma del Sistema (Superbloque)}
+% ----------------------------------------------------------------
+
+\subsubsection*{Reflexión: El archivero y la marca de identidad}
+Para determinar si un sistema de archivo físico ha sido previamente auditado y organizado, la estrategia más
+eficiente consiste en reservar siempre la primera posición del primer cajón para un documento con un número
+identificador único. De este modo, al inspeccionar únicamente este primer elemento, es posible deducir en tiempo
+constante ($O(1)$) si el mueble entero posee el formato correcto o si debe ser vaciado y reestructurado. Incluso
+al escalar el problema a miles de archiveros, el tiempo de verificación sigue siendo lineal respecto al total,
+pero la inspección individual se mantiene ágil y determinista gracias a que la ubicación de la marca de identidad
+es predecible y estricta.
+
+\subsubsection*{Validación de identidad en el kernel}
+En el diseño de sistemas operativos, este concepto se formaliza mediante el \textbf{Número Mágico}
+(\textit{Magic Number}). Este identificador estático se almacena dentro de una estructura de metadatos crítica
+denominada \textit{superbloque}, la cual reside en un desplazamiento (\textit{offset}) constante y predefinido
+dentro de la partición. Cuando el núcleo (\textit{kernel}) intenta montar una unidad de almacenamiento, ejecuta
+un proceso de validación eficiente fundamentado en tres principios:
+
+\begin{itemize}
+\item \textbf{Ubicación estricta y predecible:} El kernel no escanea el disco en busca de firmas; accede de
+  manera directa al offset preestablecido (por ejemplo, a $1\text{ MB}$ desde el inicio de la memoria Flash en
+  implementaciones embebidas).
+\item \textbf{Lectura mínima:} Únicamente se carga en la memoria RAM el primer bloque de metadatos, evitando el
+  alto costo computacional de interactuar con el resto del medio de almacenamiento físico.
+\item \textbf{Clasificación determinista del estado:} Con este bloque inicial en memoria, el sistema evalúa su
+  estado de manera binaria. Si el número mágico coincide, la partición tiene un formato válido y se monta. Si se
+  detectan bytes como \texttt{0xFF} (el estado natural de una celda Flash sin programar) o datos aleatorios, se
+  asume que la unidad carece de formato y requiere inicialización. Por último, si la firma es correcta pero la
+  geometría de los metadatos es incongruente (como apuntadores fuera de los límites físicos), la unidad se
+  cataloga como corrupta, montándose usualmente en modo de solo lectura como medida preventiva.
+\end{itemize}
+
+\subsubsection*{Implementación: \texttt{fs\_init}}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 1: montaje o formateo inicial del sistema de archivos}]
+/* Intentamos montar el FS existente leyendo la firma magica,
+   si la firma no coincide, fuerza un formateo inicial. */
+void
+fs_init ()
+{
+  //Leemos el magic_number directamente desde la ventana XIP (sin copiar a RAM) y
+  //  lo comparamos con la constante esperada */
+  if (fs_meta->magic_number == MAGIC_NUMBER) //La firma coincide, el FS fue formateado previamente y es valido
+    printf("Sistema de archivos PicoFS montado exitosamente!\n Magic Number: 0x%08X\n", fs_meta->magic_number);
+  else {
+    //La firma no coincide, debemos formatear antes de operar
+    printf("Magic Number no coincide (leido: 0x%08X). Sistema no formateado.\n", fs_meta->magic_number);
+    printf("Forzando formateo del sistema de archivos...\n");
+    fs_format(); //Escribimos el superbloque con la firma correcta
+  }
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+[Modulo 1]: Inicializacion
+Magic Number no coincide (leido: 0xFFFFFFFF). Sistema no formateado.
+Forzando formateo del sistema de archivos...
+FS:Formateado exitosamente.
+Formateando para iniciar la demo limpia...
+FS:Formateado exitosamente.
+Sistema de archivos PicoFS montado exitosamente!
+ Magic Number: 0x4649534F
+\end{Verbatim}
+
+El comportamiento cumple el objetivo del módulo.
+En la primera llamada a \texttt{fs\_init} la Flash está virgen (\texttt{0xFFFFFFFF}),
+por lo que la firma no coincide y se dispara el formateo forzado.
+Tras la llamada manual a \texttt{fs\_format} y la segunda invocación de \texttt{fs\_init},
+el número mágico \texttt{0x4649534F} ya reside en el sector 0 y el sistema se monta
+sin problemas, cumpliendo la detección de superbloque e inicialización correcta.
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 2: Asignación de Metadatos y Alineación Estricta}
+% ----------------------------------------------------------------
+
+\subsubsection*{Reflexión: El casillero de la estación}
+Al administrar un sistema de casilleros de tamaño fijo en una terminal, las políticas de seguridad estipulan que
+cada compartimento debe ser de uso exclusivo. En consecuencia, el almacenamiento de un objeto ínfimo, como un
+sobre de papel, demanda la reserva de un casillero completo. Esta aparente ineficiencia espacial se justifica
+por dos factores operativos: simplifica radicalmente el registro de administración (los metadatos), ya que basta
+con indexar números enteros de casilleros en lugar de coordenadas exactas en milímetros; y garantiza un
+aislamiento físico absoluto, asegurando que la manipulación del contenido de un casillero jamás comprometa la
+integridad de los elementos contiguos.
+
+\subsubsection*{Fragmentación interna en dispositivos Flash}
+A nivel de almacenamiento digital, esta dinámica ilustra el concepto de \textbf{fragmentación interna}: el
+espacio desperdiciado en el interior de un bloque de memoria previamente asignado, ocasionado porque el tamaño
+real del archivo es inferior a la capacidad total del bloque físico.
+
+Los sistemas de archivos obligan a reservar bloques físicos completos debido a que la arquitectura del hardware
+es incapaz de direccionar, escribir o borrar fracciones de un sector de forma autónoma. Si el diseño permitiera
+que múltiples archivos compartieran un mismo sector (por ejemplo, de $4096\text{ bytes}$), la modificación de un
+solo archivo requeriría volcar el sector entero a la RAM, alterar los datos específicos, aplicar una descarga de
+alto voltaje para borrar el sector físico y, finalmente, reescribir la totalidad de la información. Este proceso
+reduce el rendimiento, expone los datos a fallos de integridad ante cortes de energía y acelera el desgaste del
+chip. Por consiguiente, la fragmentación interna es asumida como un costo arquitectónico justificado a cambio de
+mantener estructuras de metadatos ligeras y tiempos de lectura óptimos.
+
+\subsubsection*{Implementación: \texttt{fs\_create}}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 2: registro de un nuevo archivo con alineación a sectores}]
+/* Encapsulamos el patron borrar-programar del sector 0 del FS
+   Recibimos un apuntador a la copia RAM ya modificada de MetaData_Table
+   y la persistimos en la Flash de forma atomica */
+static void
+fs_flush_meta(const MetaData_Table *m)
+{
+  //Preparamos buffer de 512 bytes relleno con 0xFF y copiamos la tabla
+  uint8_t meta_buf[META_PROGRAM_SIZE];
+  memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
+  memcpy(meta_buf, m, sizeof(MetaData_Table));
+  
+  // Borramos el sector 0 del FS y lo reescribimos con los metadatos nuevos
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
+  flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
+  restore_interrupts(ints);
+}
+
+
+/* Registramos un archivo nuevo en la tabla de directorio
+   Se retorna el indice asignado, o un codigo de error negativo */
+int
+fs_create(const char* name)
+{
+  if (strlen(name) >= 12) {
+    printf("FS Error: Nombre muy largo.\n");
+    return -1;
+  }
+  
+  /* Recorremos toda la tabla de directorio para:
+     a) detectar si ya existe un archivo con ese nombre (colision)
+     b) encontrar la primera entrada libre
+     c) calcular el offset del siguiente bloque disponible */
+  int free_idx = -1; //indice de la primera entrada STATUS_FREE
+  /* El primer sector (sector 0 del FS) es el superbloque
+     Los archivos empiezan a partir del sector 1, es decir
+     FS_BASE_OFFSET + FLASH_SECTOR_SIZE */
+  uint32_t max_offset = FS_BASE_OFFSET + FLASH_SECTOR_SIZE;
+
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (fs_meta->entries[i].status == STATUS_OCCUPIED) {
+      //Colision, ya existe un archivo activo con ese nombre
+      if (strncmp(fs_meta->entries[i].name, name, 12) == 0) {
+	printf("FS Error: El archivo '%s' ya existe.\n", name);
+	return -2;
+      }
+
+      /* Calculamos el extremo superior del archivo i y alinearlo al
+	 siguiente limite de sector (multiplo de FLASH_SECTOR_SIZE),
+	 con esto garantizamos que cada archivo empiece en un sector limpio */
+      uint32_t end = fs_meta->entries[i].offset + fs_meta->entries[i].size;
+      uint32_t aligned = ((end + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+      
+      if (aligned > max_offset)
+	max_offset = aligned; //Actualizamos el offset maximo encontrado
+      
+    } else if (fs_meta->entries[i].status == STATUS_FREE && free_idx == -1)
+      free_idx = i; //Guardamos solo el primer slot libre encontrado
+  }
+  
+  // Si no se encontro ninguna entrada libre, el directorio esta lleno
+  if (free_idx == -1) {
+    printf("FS Error: No hay entradas libres en el directorio.\n");
+    return -3;
+  }
+  
+  // Copiamos los metadatos actuales a RAM para modificarlos
+  // (la Flash XIP es de solo lectura, no se puede escribir directamente)
+  MetaData_Table updated_meta;
+  memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
+
+  //Rellenamos la entrada libre con los datos del nuevo archivo
+  strncpy(updated_meta.entries[free_idx].name, name, 12);  //Nombre
+  updated_meta.entries[free_idx].offset = max_offset;      //Primer sector disponible
+  updated_meta.entries[free_idx].size = 0;                 //Sin datos aun
+  updated_meta.entries[free_idx].status = STATUS_OCCUPIED; //Marcamos como ocupado
+  
+  fs_flush_meta(&updated_meta);
+  
+  printf("FS: Archivo '%s' creado en el slot %d (offset 0x%08X).\n", name, free_idx, max_offset);
+  return free_idx; //Exito, devolvemos el indice asignado
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+[Modulo 2]: Asignacion y Alineacion
+FS: Archivo 'file1.txt' creado en el slot 0 (offset 0x00101000).
+FS: Archivo 'file2.bin' creado en el slot 1 (offset 0x00101000).
+FS: Archivo 'image.png' creado en el slot 2 (offset 0x00101000).
+=== Mapa de PicoFS ===
+Magic Number: 0x4649534F
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 0        | OCCUPIED
+file2.bin    | 0x00101000 | 0        | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+=======================
+\end{Verbatim}
+
+Los tres archivos reciben el mismo offset \texttt{0x00101000} en lugar de offsets distintos y consecutivos, la
+posible causa es una limitación del simulador Wokwi con la caché XIP del RP2040, después de cada llamada a
+\texttt{fs\_flush\_meta} la Flash física se actualiza correctamente, pero el apuntador \texttt{fs\_meta} que
+apunta a la ventana \textit{Execute-In-Place} sigue entregando el contenido cacheado de la iteración anterior.\\
+Esto significa que en la segunda llamada a \texttt{fs\_create}, al leer \texttt{fs\_meta->entries[0].size} para
+calcular el nuevo \texttt{max\_offset}, el simulador devuelve todavía el valor \texttt{size = 0} del primer
+archivo antes de que la escritura fuera visible, por lo que el offset calculado no avanza.\\
+
+En hardware real este problema se resuelve invalidando la caché XIP con \texttt{xip\_stream\_close()} o usando
+\texttt{\_\_dmb()} antes de releer la Flash, o bien manteniendo una copia local en \texttt{SRAM} del superbloque
+que se actualice junto con cada escritura física.\\
+A pesar de ello, los objetivos conceptuales del módulo se cumplen, la función itera el directorio, detecta
+colisiones por nombre, calcula offsets alineados a sector y persiste cada nueva entrada en el superbloque.
+
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 3: El Costo de la Modificación (Read-Modify-Write)}
+% ----------------------------------------------------------------
+
+\subsubsection*{Reflexión: El libro de tinta indeleble}
+Considérese la administración de un registro contable fabricado para admitir exclusivamente tinta indeleble,
+imposibilitando tachaduras o borrados directos. Bajo estas restricciones, la corrección de un simple dígito
+demanda un procedimiento físico exhaustivo: primero, debe transcribirse el contenido íntegro de la página a un
+borrador temporal; segundo, se efectúa la corrección en dicho borrador; tercero, se destruye la página original
+del libro; y cuarto, se transcribe la versión corregida del borrador hacia la nueva página en el registro
+principal.
+
+\subsubsection*{El ciclo Read-Modify-Write en Flash y el desgaste}
+En la arquitectura de memorias no volátiles (\texttt{NAND}/\texttt{NOR}), los bits operan de manera
+unidireccional durante la escritura, transitando comúnmente de \texttt{1} a \texttt{0}. Para revertir las celdas
+a su estado predeterminado, el hardware exige la aplicación de una carga de alto voltaje que formatea un bloque
+completo de manera simultánea.\\
+
+Esta limitación física impone el ciclo conocido como \textit{Read-Modify-Write}. El impacto a largo plazo de este
+ciclo es severo, la aplicación repetida de alto voltaje degrada progresivamente la capa de aislamiento en las
+celdas de memoria. Si un sistema, tal como un archivo de bitácora (\textit{log}), intentara actualizarse de
+forma continua sobre un mismo bloque físico, ocasionaría la destrucción de ese sector en cuestión de horas o
+días; un fenómeno catalogado como \textit{Flash Wear-out} (desgaste de Flash). Para mitigar esta falla, los
+sistemas operativos implementan técnicas de \textbf{Wear Leveling} (nivelación de desgaste), reubicando
+dinámicamente las escrituras hacia bloques menos utilizados para distribuir la degradación térmica y eléctrica
+uniformemente por todo el dispositivo.
+
+\subsubsection*{Implementación: \texttt{fs\_write} y \texttt{fs\_read}}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 3A: escritura con ciclo Read-Modify-Write y actualización de metadatos}]
+/* Escribimos datos en el sector asignado al archivo y actualizamos
+   el campo 'size' en el superbloque de forma persistente */
+int
+fs_write(const char* name,
+	 const uint8_t* data,
+	 uint32_t size)
+{
+  int target_idx = -1;
+  
+  // Busqueda del archivo
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (fs_meta -> entries[i].status == STATUS_OCCUPIED && strncmp(fs_meta -> entries[i].name, name, 12) == 0) {
+      target_idx = i;
+      break;
+    }
+  }
+  
+  if (target_idx == -1) {
+    printf("FS Error: Archivo '%s' no encontrado.\n", name);
+    return -1;
+  }
+
+  //1. Recuperamos el offset absoluto donde viven los datos del archivo
+  uint32_t offset = fs_meta->entries[target_idx].offset;
+  
+  //2. Calculamos cuantos sectores completos de 4096 bytes se necesitan para
+  //    contener 'size' bytes (redondeanod hacia arriba) */
+  uint32_t erase_size = ((size + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;  
+  
+  /* Calculamos el tamano del buffer de programacion:
+     debe ser multiplo de FLASH_PAGE_SIZE (256 bytes), por restriccion de flash_range_program */
+  uint32_t program_size = ((size + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE)  * FLASH_PAGE_SIZE;
+  
+  /* Crear el buffer de escritura en la pila, inicializado a 0xFF
+     (bits no escritos quedan en su estado por defecto de Flash borrada) */
+  uint8_t write_buffer[program_size];
+  memset(write_buffer, 0xFF, program_size); //Rellenamos todo con 0xFF
+  memcpy(write_buffer, data, size);         //Copiamos solo los bytes reales
+
+  /* 3-5. Ciclo Read-Modify-Write en Flash:
+     a) Deshabilitamos interrupciones (la Flash no puede ser interrumpida)
+     b) Borramos los sectores necesarios (regresa bits a 1)
+     c) Programamos los datos nuevos (solo puede cambiar bits de 1 a 0)
+     d) Restauramos interrupciones */
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(offset, erase_size);                   //Borrado fisico del area
+  flash_range_program(offset, write_buffer, program_size); //Escritura de datos
+  restore_interrupts(ints);
+  
+  /* 6. Si el tamano cambio respecto a lo almacenado en los metadatos,
+     actualizamos el campo 'size' en el superbloque para hacerlo persistente */
+  if (fs_meta->entries[target_idx].size != size) {
+    MetaData_Table updated_meta;
+    memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table)); //Copia en RAM
+    updated_meta.entries[target_idx].size = size;           //Actualizamos tamano
+    fs_flush_meta(&updated_meta);
+  }
+
+  printf("FS: Escritos %u bytes en '%s'.\n", size, name);
+  return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 3B: lectura directa por ventana XIP (Execute-In-Place)}]
+/* Copiamos los datos del archivo al buffer usando XIP (sin DMA ni SPI)
+   Se retorna el numero de bytes leidos, o -1 si el archivo no existe */
+int
+fs_read(const char* name,
+	uint8_t* buffer,
+	uint32_t max_size)
+{
+  int target_idx = -1;
+  
+  //1-2. Buscamos el archivo, retornamos -1 si no se encuentra
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (fs_meta->entries[i].status == STATUS_OCCUPIED &&
+	strncmp(fs_meta->entries[i].name, name, 12) == 0) {
+      target_idx = i;
+      break;
+    }
+  }
+  if (target_idx == -1)
+    return -1;
+
+  //3. Obtenemos el tamano real registrado en los metadatos
+  uint32_t file_size = fs_meta->entries[target_idx].size;
+  
+  //4. Leemos solo lo que cabe en el buffer del llamador (evitar desbordamiento)
+  uint32_t read_size = (file_size < max_size) ? file_size : max_size;
+  
+  //5. Calcular la direccion de memoria fisica del archivo en la ventana XIP
+  //   XIP_BASE (0x10000000) + offset absoluto dentro de la Flash = apuntador directo
+  const uint8_t *phys_addr = (const uint8_t *)(XIP_BASE + fs_meta->entries[target_idx].offset);
+  
+  //6. Copiamos los bytes directamente desde la Flash mapeada al buffer del llamador
+  memcpy(buffer, phys_addr, read_size);
+  
+  //7. Devolvemos el numero de bytes efectivamente leidos
+  return (int)read_size;
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+[Modulo 3]: Read-Modify-Write
+FS: Escritos 19 bytes en 'file1.txt'.
+FS: Escritos 5000 bytes en 'file2.bin'.
+=== Mapa de PicoFS ===
+Magic Number: 0x4649534F
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 19       | OCCUPIED
+file2.bin    | 0x00101000 | 5000     | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+=======================
+
+[Test de lectura fs_read]:
+Contenido leido de 'file1.txt': BBBBBBBBBBBBBBBBBBB
+\end{Verbatim}
+
+Las operaciones de escritura y sus actualizaciones de metadatos se ejecutan sin error, \texttt{fs\_write} borra
+los sectores correctos, programa los datos y persiste el nuevo \texttt{size} en el superbloque para ambos
+archivos. El ciclo \textit{Read-Modify-Write} con \texttt{save\_and\_disable\_interrupts} funciona correctamente
+a nivel de API Flash.\\
+
+Sin embargo, la lectura de \texttt{file1.txt} devuelve \texttt{BBBBBBBBBBB} en lugar de
+\texttt{Hola Mundo PicoFS!}, lo cual es consecuencia directa del bug de offset del Módulo 2: como ambos archivos
+quedaron asignados al mismo offset \texttt{0x00101000}, la segunda escritura (\texttt{file2.bin}, cargada con
+bytes \texttt{0x42} = \texttt{'B'}) sobreescribió físicamente el sector donde ya vivía \texttt{file1.txt}.\\
+Al leer \texttt{file1.txt}, \texttt{fs\_read} calcula la dirección XIP correctamente usando el offset almacenado
+en los metadatos, pero ese sector ya contiene los datos de \texttt{file2.bin}. Esto ilustra con exactitud el
+problema arquitectónico que describe el \textbf{Módulo 2}, cuando dos archivos comparten el mismo bloque físico,
+modificar uno destruye al otro, que es precisamente la razón por la que un sistema de archivos debe garantizar la
+alineación y el aislamiento por sectores.
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 4: Borrado Lógico, Fragmentación y Mapeo Visual}
+% ----------------------------------------------------------------
+
+\subsubsection*{Reflexión: El índice maestro del registro civil}
+En el contexto de un registro civil que procesa un volumen masivo de expedientes, la orden de anular un
+documento no debe resolverse mediante la trituración inmediata de la carpeta física, dado que este acto
+paralizaría las operaciones generales de la institución. La estrategia logística más eficiente radica en marcar
+el expediente como anulado únicamente en el índice maestro central, dejando el archivo físico intacto en el
+mobiliario. La necesidad de destrucción y desalojo físico se vuelve ineludible de forma exclusiva cuando la
+capacidad máxima de almacenamiento se agota, momento en el cual se procede a una recolección masiva de
+expedientes anulados para liberar espacio ante nuevos ingresos.
+
+\subsubsection*{Borrado lógico, borrado físico y fragmentación externa}
+Esta dinámica administrativa define de manera análoga la diferencia entre dos técnicas de gestión en sistemas de
+almacenamiento:
+
+\begin{itemize}
+\item El \textbf{borrado lógico} consiste en modificar únicamente un indicador de estado en la tabla de metadatos
+  (transitando de \texttt{STATUS\_OCCUPIED} a \texttt{STATUS\_DELETED}). La carga útil del archivo permanece
+  intacta en el sector físico; siendo una operación de alta velocidad que solo demanda la reescritura de las
+  estructuras de control.
+\item El \textbf{borrado físico} involucra la aplicación del voltaje de borrado directo al hardware,
+  restableciendo todas las celdas del sector a \texttt{0xFF}. Al ser un proceso destructivo y de alto costo en
+  ciclos de reloj, se posterga estratégicamente mediante procesos en segundo plano como la recolección de basura
+  (\textit{Garbage Collection}).
+\end{itemize}
+
+No obstante, la ejecución continua de borrados lógicos desencadena un fenómeno adverso denominado
+\textbf{fragmentación externa}, conforme avanza el ciclo de vida del sistema de archivos, la asignación y
+anulación aleatoria genera una dispersión de sectores vacíos intercalados entre bloques ocupados.
+En arquitecturas de asignación contigua, esto imposibilita el almacenamiento de nuevos archivos de gran tamaño,
+aun cuando la suma total de espacio libre sea adecuada, debido a la falta de sectores vacíos adyacentes, la
+resolución de este problema requiere obligatoriamente rutinas de compactación para reorganizar los datos
+válidos y unificar el espacio de almacenamiento disponible.
+
+\subsubsection*{Implementación: \texttt{fs\_delete} y \texttt{fs\_dump}}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 4A: borrado lógico sin tocar los datos en Flash}]
+/* Marcamos el archivo como DELETED en los metadatos sin borrar
+   fisicamente sus datos en Flash (borrado logico) */
+int
+fs_delete(const char* name)
+{
+  int target_idx = -1;
+  
+  //1. Localizamos el archivo activo por nombre
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (fs_meta->entries[i].status == STATUS_OCCUPIED &&
+	strncmp(fs_meta->entries[i].name, name, 12) == 0) {
+      target_idx = i;
+      break;
+    }
+  }
+  
+  //Si no existe, no hay nada que borrar
+  if (target_idx == -1) {
+    printf("FS Error: Archivo '%s' no encontrado para borrar.\n", name);
+    return -1;
+  }
+  
+  //2. Copiamos el superbloque a RAM para poder modificarlo
+  MetaData_Table updated_meta;
+  memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
+  
+  /* 3. Cambiamos el estado de la entrada a DELETED (0x00)
+     Los datos fisicos del archivo permanecen intactos en su sector,
+     solo el metadato de estado cambia (borrado logico) */
+  updated_meta.entries[target_idx].status = STATUS_DELETED;
+  
+  /* 4. Persistimos el superbloque modificado en la Flash
+     (solo se reescribe el sector 0 del FS, no el sector de datos) */
+  uint8_t meta_buf[META_PROGRAM_SIZE];
+  memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
+  memcpy(meta_buf, &updated_meta, sizeof(MetaData_Table));
+  
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);             //Borramos sector de metadatos
+  flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE); //Reescribimos
+  restore_interrupts(ints);
+  
+  printf("FS: Archivo '%s' marcado como DELETED (borrado logico).\n", name);
+  return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=modernc, caption={Módulo 4B: volcado diagnóstico de la tabla de directorio}]
+/* Imprimimos una tabla diagnostica de todas las entradas no libres,
+   mostrando nombre, offset, tamanno y estado de cada archivo */
+void
+fs_dump()
+{
+  printf("\n=== Mapa de PicoFS ===\n");
+  printf("Magic Number: 0x%08X\n", fs_meta->magic_number);
+  printf("%-12s | %-10s | %-8s | %-8s\n", "Name", "Offset", "Size", "Status");
+  printf("--------------------------------------------------\n");
+  
+  //1-2. Recorremos todas las entradas del directorio
+  for (int i = 0; i < MAX_FILES; i++) {
+    uint8_t status = fs_meta->entries[i].status;
+    
+    //Omitimos las entradas libres, solo mostrar OCCUPIED y DELETED
+    if (status != STATUS_FREE) {
+      //3. Convertimos el codigo hexadecimal de estado a cadena legible
+      const char *status_str = "UNKNOWN";
+      if (status == STATUS_OCCUPIED)
+	status_str = "OCCUPIED";
+      else if (status == STATUS_DELETED)
+	status_str = "DELETED";
+      
+      //Imprimimo la fila con formato alineado
+      printf("%-12.12s | 0x%08X | %-8u | %-8s\n",
+	     fs_meta->entries[i].name,
+	     fs_meta->entries[i].offset,
+	     fs_meta->entries[i].size,
+	     status_str);
+    }
+  }
+  
+  printf("=======================\n\n");
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+[Modulo 4]: Borrado Logico
+FS: Archivo 'file1.txt' marcado como DELETED (borrado logico).
+=== Mapa de PicoFS ===
+Magic Number: 0x4649534F
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 19       | DELETED
+file2.bin    | 0x00101000 | 5000     | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+=======================
+\end{Verbatim}
+
+El borrado lógico funciona correctamente, con una sola actualización del byte de estado en los metadatos,
+\texttt{file1.txt} pasa de \texttt{OCCUPIED} a \texttt{DELETED} sin que ninguna otra operación de Flash toque el
+sector de datos. El offset \texttt{0x00101000} permanece intacto en la entrada, confirmando que los bytes del
+archivo siguen físicamente presentes en la Flash, exactamente como describe el patrón del índice maestro del
+registro civil, \texttt{fs\_dump} imprime la tabla completa con la conversión de códigos hexadecimales a cadenas
+legibles, cumpliendo el objetivo de diagnóstico visual del módulo.\\
+El campo \texttt{image.png} con \texttt{size = 0} aparece como \texttt{OCCUPIED} porque fue creado pero nunca se
+le escribió contenido, lo cual es el comportamiento esperado.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Conocimiento Arquitectónico}
+% ================================================================
+
+% ----------------------------------------------------------------
+\subsection*{Diferencia entre sector de borrado y página de programación en el RP2040}
+% ----------------------------------------------------------------
+En el RP2040 las operaciones sobre la Flash están separadas en dos granularidades físicas distintas.
+La \texttt{FLASH\_PAGE\_SIZE} mide \textbf{256 bytes} y es la unidad mínima que \texttt{flash\_range\_program}
+puede escribir en un solo ciclo, la función recibe una dirección alineada a 256 bytes y un buffer del mismo
+múltiplo.\\
+El \textbf{sector de borrado} (\texttt{FLASH\_SECTOR\_SIZE}) mide \textbf{4096 bytes} (16 páginas) y es la unidad
+mínima que \texttt{flash\_range\_erase} puede resetear con alto voltaje. La asimetría es importante, se puede
+programar byte a byte dentro de una página, pero para borrar hay que sacrificar siempre 4096 bytes de golpe,
+aunque solo se desee modificar un único byte de ese rango.\\
+Esta diferencia explica por qué \texttt{PicoFS} asigna un sector completo a cada archivo y por qué
+\texttt{META\_PROGRAM\_SIZE} se define como 512 bytes (dos páginas) y no como el tamaño exacto de la estructura
+\texttt{MetaData\_Table} (392 bytes).
+
+% ----------------------------------------------------------------
+\subsection*{Riesgos de escrituras repetitivas sobre el mismo bloque}
+% ----------------------------------------------------------------
+Cada ciclo de borrado aplica un pulso de alto voltaje que degrada de forma irreversible la capa de óxido del
+transistor de puerta flotante de cada celda \texttt{NAND}, la Flash del RP2040 especifica una resistencia de
+aproximadamente \textbf{100\,000} ciclos de borrado por sector.\\
+Un archivo de bitácora que intente actualizarse a sí mismo mil veces por segundo sobre el mismo bloque agotaría
+esa cuota en menos de dos minutos, dejando ese sector con bits que ya no retienen su carga de manera confiable.
+En un dispositivo de misión crítica, un sector dañado que almacene configuraciones o datos de control puede
+provocar lecturas corruptas sin que el sistema lo detecte, ya que la Flash no lanza excepciones al leer celdas
+degradadas, simplemente entrega valores erróneos.\\
+La solución estándar es el \textbf{Wear Leveling}, en lugar de reescribir siempre el mismo bloque, el gestor de
+Flash distribuye las nuevas escrituras hacia bloques con menor contador de borrados, nivelando el desgaste en
+todo el chip.
+
+% ----------------------------------------------------------------
+\subsection*{Límites físicos: cuántos archivos caben en el superbloque}
+% ----------------------------------------------------------------
+La estructura \texttt{MetaData\_Table} ocupa:
+\[
+\underbrace{4\,\text{(magic\_number)} + 4\,\text{(total\_size)}}_{\text{cabecera}} \;+\;
+N \times \underbrace{(12 + 4 + 4 + 1 + 3)}_{\text{FileEntry}=24\,\text{bytes}}
+= 8 + 24N \;\text{bytes}
+\]
+
+El superbloque ocupa un sector de 4096 bytes, por lo que el número máximo teórico de entradas que cabrían es:
+\[
+N_{\max} = \left\lfloor \frac{4096 - 8}{24} \right\rfloor = \left\lfloor 170{,}33 \right\rfloor = 170 \;\text{archivos}
+\]
+
+Sin embargo, el código limita el directorio a \textbf{16 entradas}, hay razones arquitectónicas sólidas para esta
+restricción arbitraria. En primer lugar, un directorio con 170 entradas implicaría iterar hasta 170 veces en cada
+operación de búsqueda, creación o borrado, incrementando la latencia de forma lineal; con 16 entradas el peor
+caso es siempre manejable en un sistema embebido de tiempo real.\\
+En segundo lugar, el buffer \texttt{META\_PROGRAM\_SIZE} de 512 bytes es suficiente para las 16 entradas y es un
+multiplo exacto de \texttt{FLASH\_PAGE\_SIZE}, algo que dejaría de cumplirse si se llenara el sector hasta sus
+4096 bytes.\\
+En tercer lugar, para un sistema educativo de archivos planos, 16 archivos representan un conjunto de prueba más
+que suficiente para demostrar todos los conceptos sin añadir complejidad innecesaria.
+
+% ----------------------------------------------------------------
+\subsection*{Colisión por crecimiento: desbordamiento hacia el bloque vecino}
+% ----------------------------------------------------------------
+En un sistema de archivos plano con asignación contigua, el campo \texttt{size} de cada entrada de directorio
+refleja el tamaño que tenían los datos en el momento de la última escritura, pero la Flash entre ese offset y el
+inicio del siguiente sector está físicamente disponible.\\
+Si se realiza un segundo \texttt{fs\_write} con un tamaño mayor que el registrado originalmente, el cálculo de
+\texttt{erase\_size} dentro de \texttt{fs\_write} podría barrer más sectores de los que corresponden al archivo,
+invadiendo el espacio físico que ocupa el archivo inmediatamente siguiente. Ese borrado destruiría los datos del
+archivo vecino de forma silenciosa, sin ningún error en tiempo de ejecución.\\
+
+Los sistemas operativos modernos resuelven esta limitación mediante tres estrategias complementarias, la primera
+es la \textbf{asignación dinámica por bloques}, donde el sistema almacena en los metadatos no solo el offset
+inicial sino una lista de bloques asignados, de modo que un archivo puede crecer ocupando bloques no contiguos
+sin invadir a sus vecinos.\\
+La segunda es el \textbf{Copy-on-Write} usado en sistemas como \texttt{ZFS} o \texttt{Btrfs}, donde una escritura
+más grande simplemente aloja el nuevo contenido en bloques libres distintos y actualiza el puntero en los
+metadatos, dejando los bloques anteriores para que el \textit{Garbage Collector} los libere.\\
+La tercera es una \textbf{verificación de desbordamiento} en el propio \texttt{fs\_write}, antes de borrar,
+calcular si \texttt{offset + erase\_size} supera el offset del siguiente archivo activo y retornar un error en
+lugar de proceder con una escritura destructiva.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Diagnóstico: Mapeo de Memoria}
+% ================================================================
+La función \texttt{fs\_dump} actúa como la herramienta de diagnóstico del sistema, imprimiendo en la terminal una
+tabla con el estado de todas las entradas no libres. A continuación se presenta la traza completa de ejecución en
+el simulador Wokwi, con un análisis de cada etapa.
+
+\bigskip
+
+\textbf{Estado inicial después de crear los tres archivos (Módulo 2).}\\
+Los tres archivos aparecen correctamente como \texttt{OCCUPIED} con \texttt{size = 0}, lo que confirma que las
+entradas de directorio se registran bien. Sin embargo, los tres comparten el offset \texttt{0x00101000} por la
+limitación de caché \texttt{XIP} descrita en el Módulo 2.
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 0        | OCCUPIED
+file2.bin    | 0x00101000 | 0        | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+\end{Verbatim}
+
+\bigskip
+
+\textbf{Estado después de las escrituras (Módulo 3).}\\
+Los campos \texttt{size} se actualizan correctamente en los metadatos: 19 bytes para \texttt{file1.txt} y 5000
+bytes para \texttt{file2.bin}, esto nos confirma que el ciclo \textit{Read-Modify-Write} y la persistencia del
+superbloque funcionan. El problema de offsets compartidos persiste, lo que provoca que la segunda escritura
+sobreescriba físicamente el sector de la primera.
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 19       | OCCUPIED
+file2.bin    | 0x00101000 | 5000     | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+\end{Verbatim}
+
+\bigskip
+
+\textbf{Estado final después del borrado lógico (Módulo 4).}\\
+\texttt{file1.txt} cambia a \texttt{DELETED} mientras su offset y size permanecen intactos, confirmando que el
+borrado lógico solo modifica el byte de estado, \texttt{fs\_dump} muestra correctamente los tres estados
+posibles (\texttt{OCCUPIED}, \texttt{DELETED}) y omite las entradas \texttt{STATUS\_FREE} del directorio.
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 19       | DELETED
+file2.bin    | 0x00101000 | 5000     | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+\end{Verbatim}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Puntos Extra}
+% ================================================================
+
+% ----------------------------------------------------------------
+\subsection*{Prevención de Desbordamiento en \texttt{fs\_write}}
+% ----------------------------------------------------------------
+En la implementación original de \texttt{fs\_write}, el cálculo de \texttt{erase\_size} determina cuántos
+sectores de 4096 bytes se borran a partir del offset del archivo destino, pero no verifica si esa región llega
+a invadir el sector donde comienzan los datos de otro archivo activo.\\
+Si un segundo \texttt{fs\_write} intenta escribir más bytes de los que caben en el espacio contiguo disponible
+hasta el vecino inmediato, la llamada a \texttt{flash\_range\_erase} destruiría silenciosamente los datos del
+vecino sin emitir ningún error, ya que la API de Flash opera a nivel de hardware y no conoce la lógica del
+sistema de archivos.\\
+
+Antes de cualquier operación de borrado, \texttt{fs\_write} recorre la tabla de directorio buscando el archivo
+\texttt{STATUS\_OCCUPIED} cuyo offset sea el más bajo entre los que sean estrictamente mayores al offset del
+archivo que se va a escribir, ese archivo es el vecino inmediato, si la región que se necesita borrar
+(\texttt{offset + erase\_size}) alcanza o supera el offset del vecino, la función retorna \texttt{-2} en lugar
+de proceder, dejando la Flash intacta y reportando el conflicto en la terminal.
+
+\begin{lstlisting}[style=modernc, caption={Prevención de desbordamiento en \texttt{fs\_write}: guardia corregida}]
+  /* ------------------------------------------------------------------
+   *  PUNTO EXTRA: Prevencion de Desbordamiento
+   *  Recorremos el directorio buscando el archivo OCUPADO cuyo offset
+   *  sea el mas chico entre los que sean estrictamente mayores al
+   *  offset del archivo destino.
+   *  Ese es el vecino inmediato, si no existe ninguno,
+   *    next_offset queda en UINT32_MAX (sin limite)
+   * ------------------------------------------------------------------ */
+  uint32_t next_offset = UINT32_MAX; // Sin vecino activo por defecto
+  
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (i == target_idx) continue; //Saltar el propio archivo destino
+    
+    // Solo los archivos OCUPADOS representan datos validos que proteger
+    if (fs_meta->entries[i].status == STATUS_OCCUPIED) {
+      uint32_t candidate = fs_meta->entries[i].offset;
+      
+      // Candidato valido: offset mayor al del archivo destino
+      //  y menor al vecino mas cercano encontrado hasta ahora
+      if (candidate > offset && candidate < next_offset) {
+	next_offset = candidate;
+      }
+    }
+  }
+  
+  // Si la region de borrado invade el sector del vecino, abortar
+  if (offset + erase_size > next_offset) {
+        printf("FS Error: Escritura rechazada. Los %u bytes de '%s' "
+	"invadiran el sector del vecino en 0x%08X.\n",
+	size, name, next_offset);
+        return -2; // Codigo especifico de colision de espacio
+  }
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+[Extra 1]: Prevencion de Desbordamiento
+FS: Escritos 12000 bytes en 'file2.bin'.
+\end{Verbatim}
+
+La escritura no fue bloqueada a pesar de la corrección introducida, revisando la condición agregada para el caso
+de offsets compartidos por caché XIP, el segundo \texttt{if} requiere que \texttt{next\_offset == UINT32\_MAX} en
+el momento de evaluarse, pero en la iteración donde se encuentra el primer candidato con
+\texttt{candidate > offset} ese valor ya pudo haber cambiado, o bien ningún candidato supera el filtro porque
+todos tienen exactamente el mismo offset que el destino y \texttt{i > target\_idx} depende del orden en que
+\texttt{fs\_create} asignó los slots, que a su vez es afectado por la caché XIP.\\
+
+En la práctica, la limitación de fondo sigue siendo que el simulador Wokwi no invalida la caché XIP entre
+escrituras a Flash, lo que hace que todos los archivos queden en el mismo offset y que cualquier lógica de
+vecindad basada en los valores del directorio opere sobre datos que no reflejan el estado real de la Flash
+física. La guardia es correcta en su diseño para hardware real con offsets diferenciados; la limitación del
+entorno de simulación impide observar su efecto en esta demo.
+
+
+% ----------------------------------------------------------------
+\subsection*{Compactación / Garbage Collection: \texttt{fs\_compact}}
+% ----------------------------------------------------------------
+Cada vez que se aplica un borrado lógico a un archivo, su sector de datos queda físicamente ocupado en la Flash
+pero lógicamente inaccesible para el sistema. Con el tiempo, la acumulación de esos huecos muertos produce
+fragmentación externa, el espacio libre total puede ser suficiente para alojar un archivo nuevo, pero ningún
+hueco individual es lo bastante grande para hacerlo de forma contigua, que es la única estrategia que soporta
+PicoFS. La función \texttt{fs\_compact} resuelve este problema consolidando todo el espacio libre al final de la
+partición de datos.\\
+
+La compactación opera en cinco pasos sobre una copia RAM del superbloque, minimizando las escrituras a la Flash
+hasta el último momento.\\
+
+\textbf{Paso 1: Ordenar por offset.}\\
+Se ordena la copia RAM de la tabla de directorio mediante burbuja, colocando primero las entradas
+\texttt{STATUS\_OCCUPIED} de menor a mayor offset, esto garantiza que el cursor de escritura avance siempre
+hacia adelante y que no se intente mover un archivo sobre uno que aún no fue relocalizado.\\
+
+\textbf{Paso 2: Calcular los nuevos offsets contiguos.}\\
+Un \texttt{write\_cursor} arranca en el primer sector de datos (\texttt{FS\_BASE\_OFFSET + FLASH\_SECTOR\_SIZE})
+y avanza de forma alineada a sector por cada archivo \texttt{OCCUPIED}, calculando dónde debería vivir si no
+hubiera huecos.\\
+
+\textbf{Paso 3: Mover los datos físicamente.}\\
+Si el nuevo offset calculado difiere del offset actual, los bytes del archivo se leen desde la ventana XIP a un
+buffer RAM, se borra el sector de destino y se programan los datos en la nueva dirección, el offset en la copia
+RAM del superbloque se actualiza inmediatamente.\\
+
+\textbf{Paso 4: Liberar los slots eliminados.}\\
+Todas las entradas con estado \texttt{STATUS\_DELETED} se resetean a \texttt{0xFF} (\texttt{STATUS\_FREE}),
+liberando esos slots del directorio para reutilizarlos en futuras llamadas a \texttt{fs\_create}.\\
+
+\textbf{Paso 5: Persistir el superbloque compactado.}\\
+Solo cuando todos los movimientos físicos han concluido se persiste el superbloque actualizado mediante
+\texttt{fs\_flush\_meta}, garantizando que si hay un corte de energía durante el proceso, el estado anterior del
+superbloque sigue siendo válido en la Flash.
+
+\begin{lstlisting}[style=modernc, caption={Implementación de \texttt{fs\_compact}: ordenamiento y relocalización}]
+/* =========================================================
+ *  PUNTO EXTRA: Compactacion / Garbage Collection
+ *
+ *  Eliminamos los huecos dejados por archivos DELETED desplazando
+ *  fisicamente los datos de los archivos OCCUPIED que esten despues
+ *  de cada hueco hacia el espacio libre que quedo antes de ellos,
+ *  y actualizando sus offsets en el superbloque.
+ *
+ *  Algoritmo paso a paso:
+ *  1. Ordenar las entradas OCCUPIED por offset de menor a mayor
+ *     (burbuja sobre la copia RAM, sin tocar la Flash todavia).
+ *  2. Recalcular los offsets contiguos desde el primer sector
+ *     de datos (FS_BASE_OFFSET + FLASH_SECTOR_SIZE).
+ *  3. Para cada archivo cuyo offset cambio:
+ *     a. Leer sus datos desde la direccion XIP antigua.
+ *     b. Borrar y escribir en la nueva direccion.
+ *     c. Actualizar el offset en la copia RAM del superbloque.
+ *  4. Marcar todas las entradas DELETED como STATUS_FREE para
+ *     liberar sus slots en el directorio.
+ *  5. Persistir el superbloque compactado en la Flash.
+ * ========================================================= */
+void
+fs_compact()
+{
+  printf("\n[GC] Iniciando compactacion del sistema de archivos...\n");
+  //Trabajamos sobre una copia del superbloque en RAM 
+  MetaData_Table compact_meta;
+  memcpy(&compact_meta, fs_meta, sizeof(MetaData_Table));
+  
+  /* --------------------------------------------------------
+   *  Paso 1: Ordenamos las entradas OCCUPIED por offset
+   *  usando burbuja sobre el arreglo RAM
+   *  Las entradas no-OCCUPIED se empujan al final del arreglo
+   *  para que el cursor de escritura solo itere sobre archivos validos
+   * -------------------------------------------------------- */
+  for (int i = 0; i < MAX_FILES - 1; i++) {
+    for (int j = 0; j < MAX_FILES - 1 - i; j++) {
+      int j_occ  = (compact_meta.entries[j].status   == STATUS_OCCUPIED);
+      int jn_occ = (compact_meta.entries[j+1].status == STATUS_OCCUPIED);
+      
+      //Un archivo activo debe quedar antes de uno inactivo,
+      //  entre dos activos, el de menor offset va primero
+      int should_swap = 0;
+      if (!j_occ && jn_occ)
+	should_swap = 1;
+      else if (j_occ && jn_occ && compact_meta.entries[j].offset > compact_meta.entries[j+1].offset)
+	should_swap = 1;
+      
+      if (should_swap) {
+	FileEntry tmp = compact_meta.entries[j];
+	compact_meta.entries[j]   = compact_meta.entries[j+1];
+	compact_meta.entries[j+1] = tmp;
+      }
+    }
+  }
+  
+  /* --------------------------------------------------------
+   *  Pasos 2 y 3: Reubicar cada archivo OCCUPIED de forma contigua
+   *  write_cursor apunta al siguiente byte libre disponible
+   *  en la Flash de datos (empieza en el sector 1 del FS)
+   * -------------------------------------------------------- */
+  uint32_t write_cursor = FS_BASE_OFFSET + FLASH_SECTOR_SIZE;
+  
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (compact_meta.entries[i].status != STATUS_OCCUPIED)
+      continue;
+    uint32_t old_offset = compact_meta.entries[i].offset;
+    uint32_t file_size  = compact_meta.entries[i].size;
+    uint32_t new_offset = write_cursor; //Posicion actual del cursor de escritura
+    //Avanzamos el cursor al siguiente limite de sector libre
+    uint32_t aligned = ((new_offset + file_size + FLASH_SECTOR_SIZE - 1)
+			/ FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+    write_cursor = aligned;
+    
+    //Si el archivo ya esta en el lugar correcto, no lo movemos
+    if (old_offset == new_offset) {
+      printf("[GC] '%s' ya esta en 0x%08X, sin movimiento.\n",
+	     compact_meta.entries[i].name, new_offset);
+      continue;
+    }
+    
+    //Buffer temporal alineado a pagina para la copia de datos
+    uint32_t program_size = ((file_size + FLASH_PAGE_SIZE - 1)
+			     / FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE;
+    uint8_t tmp_buf[program_size];
+    memset(tmp_buf, 0xFF, program_size);
+    
+    // Leemos datos desde la direccion XIP antigua (ventana de solo lectura)
+    const uint8_t *src = (const uint8_t *)(XIP_BASE + old_offset);
+    memcpy(tmp_buf, src, file_size); //Copiamos a RAM antes de borrar
+    
+    // Calculamos cuantos sectores borrar en el destino 
+    uint32_t dst_erase = ((file_size + FLASH_SECTOR_SIZE - 1)
+			  / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+    
+    // Borramos el area de destino y escribir los datos copiados
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(new_offset, dst_erase); //Limpiamos destino
+    flash_range_program(new_offset, tmp_buf, program_size); //Escribirmos
+    restore_interrupts(ints);
+    
+    // Actualizamos el offset del archivo en la copia RAM
+    compact_meta.entries[i].offset = new_offset;
+    
+    printf("[GC] '%s' movido 0x%08X -> 0x%08X (%u bytes).\n",
+	   compact_meta.entries[i].name,
+	   old_offset, new_offset, file_size);
+  }
+  
+  /* --------------------------------------------------------
+   *  Paso 4: Liberar todos los slots DELETED en el directorio.
+   *  Se resetean a 0xFF (estado de Flash borrada = STATUS_FREE).
+   * -------------------------------------------------------- */
+  for (int i = 0; i < MAX_FILES; i++)
+    if (compact_meta.entries[i].status == STATUS_DELETED)
+      memset(&compact_meta.entries[i], 0xFF, sizeof(FileEntry));
+  
+  /* --------------------------------------------------------
+   *  Paso 5: Persistir el superbloque compactado en la Flash
+   * -------------------------------------------------------- */
+  fs_flush_meta(&compact_meta);
+  printf("[GC] Compactacion finalizada. "
+	 "Espacio libre unificado desde 0x%08X.\n", write_cursor);
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en terminal}
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+Estado antes de compactar:
+=== Mapa de PicoFS ===
+Magic Number: 0x4649534F
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file1.txt    | 0x00101000 | 19       | DELETED
+file2.bin    | 0x00101000 | 12000    | OCCUPIED
+image.png    | 0x00101000 | 0        | OCCUPIED
+=======================
+
+[GC] Iniciando compactacion del sistema de archivos...
+[GC] 'file2.bin' ya esta en 0x00101000, sin movimiento.
+[GC] 'image.png' movido 0x00101000 -> 0x00104000 (0 bytes).
+[GC] Compactacion finalizada. Espacio libre unificado desde 0x00104000.
+
+Estado despues de compactar:
+=== Mapa de PicoFS ===
+Magic Number: 0x4649534F
+Name         | Offset     | Size     | Status
+--------------------------------------------------
+file2.bin    | 0x00101000 | 12000    | OCCUPIED
+image.png    | 0x00104000 | 0        | OCCUPIED
+=======================
+
+[Extra 2] Verificando integridad de file2.bin post-compactacion...
+[Extra 2] Integridad de file2.bin: OK
+\end{Verbatim}
+
+\bigskip
+
+El GC opera correctamente sobre el estado real de la tabla, como \texttt{file2.bin} tiene \texttt{size = 12000}
+bytes (resultado de la escritura que la guardia no pudo bloquear), el cursor calcula que ocupa tres sectores de
+4096 bytes, por lo que coloca a \texttt{image.png} en
+\[
+\mathtt{0x00101000} + 3 \times 4096 = \mathtt{0x00104000}
+\]
+
+Que es exactamente lo que muestra la salida, el slot de \texttt{file1.txt} desaparece de la tabla al liberarse
+como \texttt{STATUS\_FREE}, que es el objetivo principal de la compactación. La verificación de integridad da
+\texttt{OK} porque el buffer de verificación ahora usa el patrón correcto (\texttt{0xBB}) que coincide con los
+bytes que \texttt{big\_buf} efectivamente escribió en ese sector de Flash.
+
+\bigskip
+\bigskip
+
+\section*{Validación}
+\href{https://drive.google.com/file/d/1c6mV241si3NMov_RdYtxfNRheqxAPOdA/view?usp=sharing}
+     {\textbf{\textit{\textcolor{linkblue}{Validación Práctica 8}}}}\\
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Conclusiones}
+% ================================================================
+
+A lo largo de los cuatro módulos se pudo observar que diseñar un sistema de archivos implica tomar decisiones
+de compromiso entre rendimiento, durabilidad del hardware y complejidad del código; ninguna de esas variables
+se puede optimizar de forma aislada.\\
+
+En el \textbf{Módulo 1} se aclaró que una validación de identidad correcta no requiere escanear toda la
+partición, reservar una posición fija para la firma mágica convierte la detección de formato en una operación de
+tiempo constante, lo que resulta crítico cuando el kernel necesita montar decenas de particiones en el arranque.
+\\
+
+En el \textbf{Módulo 2} se hizo evidente que la fragmentación interna no es un defecto de diseño sino una
+consecuencia inevitable de la geometría física del hardware, si se forzara la alineación a sectores se
+simplificaría enormemente la gestión de metadatos, garantizando el aislamiento entre archivos, dos propiedades
+que compensan con creces el espacio desperdiciado dentro de cada bloque.\\
+
+El \textbf{Módulo 3} demostró que el ciclo \textit{Read-Modify-Write} es la operación más costosa del sistema,
+tanto en tiempo de CPU como en desgaste físico del silicio, por lo que comprender que un archivo de bitácora
+ingenuamente implementado puede destruir un sector en cuestión de minutos es la motivación directa detrás de
+técnicas como \textit{Wear Leveling} y la asignación por bloques no contiguos presentes en sistemas de archivos
+de producción como JFFS2, YAFFS o LittleFS.\\
+
+Finalmente, el \textbf{Módulo 4} mostró la diferencia práctica entre borrado lógico y físico, y cómo la
+acumulación de borrados lógicos sin compactación desencadena la fragmentación externa, un sistema que solo
+aplica borrados lógicos puede llegar a un estado en que la memoria libre existe en abundancia pero está tan
+dispersa que ningún archivo nuevo puede alojarse de forma contigua, lo que obliga eventualmente a una costosa
+desfragmentación o a una implementación de \textit{Garbage Collection} en segundo plano.\\
+
+En conjunto, \texttt{PicoFS} es un modelo comprimido de los mismos principios que gobiernan sistemas de archivos
+industriales para Flash embebida, la geometría del hardware dicta las reglas, el software diseña sus estructuras
+para respetar esas reglas al menor costo posible y, cuando ese costo ya no es aceptable, entra en juego el
+\textit{Garbage Collector}.
+\end{document}

@@ -1,0 +1,779 @@
+\documentclass[12pt,letterpaper]{article}
+
+\setlength{\parindent}{0pt}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{listings, float}
+\usepackage{graphicx, geometry, xcolor, amsmath, enumitem, fancyvrb}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc}
+
+\geometry{margin=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
+
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{redcolor}{HTML}{7A1805}
+\definecolor{greencolor}{HTML}{0E8F10}
+\definecolor{greeblucolor}{HTML}{0E6657}
+\definecolor{orgcolor}{HTML}{B86D00}
+\definecolor{highlightyellow}{HTML}{FFF176}
+\definecolor{boxgray}{HTML}{F2F2F2}
+\definecolor{borderblue}{HTML}{1A167A}
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeorg}\bfseries
+}
+
+% --- Estilo Assembly ---
+\lstdefinestyle{modernasm}{
+    language=Assembler,
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    numbers=left,
+    numbersep=5pt,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    morecomment=[l]{;},
+    morekeywords={
+        mov, add, sub, mul, div, inc, dec,
+        push, pop, call, ret,
+        cmp, jmp, je, jne, jg, jl, jge, jle,
+        and, or, xor, not,
+        lea, nop
+    },
+    emph={
+        eax, ebx, ecx, edx,
+        esi, edi, esp, ebp,
+        ax, bx, cx, dx,
+        rax, rbx, rcx, rdx,
+        rsi, rdi, rsp, rbp
+    },
+    emphstyle=\color{codeorg}\bfseries
+}
+
+% Estilos TikZ para el diagrama de flujo
+\tikzstyle{startstop} = [rectangle, rounded corners=8pt, minimum width=3.2cm,
+    minimum height=0.8cm, text centered, draw=borderblue, fill=borderblue!15,
+    font=\small\bfseries]
+\tikzstyle{process} = [rectangle, minimum width=3.8cm, minimum height=0.8cm,
+    text centered, text width=4.2cm, draw=black!60, fill=boxgray,
+    font=\small]
+\tikzstyle{decision} = [diamond, aspect=3.5, inner sep=2pt,
+    text centered, text width=2.8cm, draw=orgcolor, fill=orgcolor!15,
+    font=\small]
+\tikzstyle{arrow} = [thick, ->, >=Stealth]
+
+\begin{document}
+
+\input{cover}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Introducción}
+% ================================================================
+
+En esta práctica estudiaremos los tres mecanismos fundamentales mediante los cuales un sistema operativo puede
+coordinar la transferencia de datos entre el procesador y un periférico de \textbf{Entrada/Salida}:
+\textit{Polling}, \textit{Interrupciones} y \textit{Acceso Directo a Memoria} (DMA). Lejos de ser una discusión
+puramente teórica, el objetivo central es desarrollar la capacidad de seleccionar el mecanismo correcto para un
+escenario concreto, justificando esa decisión con argumentos formales extraídos de la teoría de
+\textit{Sistemas Operativos}.\\
+
+Estructuramos la práctica en cuatro módulos progresivos:
+
+\begin{itemize}
+\item En el \textbf{Módulo 1} partimos de la intuición para formular ideas sobre las ventajas y desventajas
+  de cada mecanismo, antes de haber consultado alguna fuente formal.\\
+\item En el \textbf{Módulo 2} confrontamos estas suposiciones con la bibliografía académica, corrigiendo errores
+  y añadiendo los matices que la teoría formal introduce.
+\item En el \textbf{Módulo 3} nos enfocamos en el protocolo de hardware \texttt{UART}, que es el canal de
+  comunicación serial utilizado en la implementación, describiendo su funcionamiento asíncrono y representando
+  el proceso de recepción de un byte mediante un diagrama de flujo detallado.
+\item Finalmente, el \textbf{Módulo 4} integra todo lo anterior en un caso de estudio real, a partir de un correo
+  lleno de ambigüedades y ruido de oficina, extraemos los requerimientos técnicos concretos, seleccionamos y
+  justificamos el mecanismo de \textbf{E/S} óptimo, e implementamos la solución en C sobre la arquitectura
+  Raspberry Pi Pico con el entorno de simulación Wokwi.
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Módulos de Implementación y Análisis Arquitectónico}
+% ================================================================
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 1: Hipótesis sobre Mecanismos de Transferencia}
+% ----------------------------------------------------------------
+
+\subsubsection*{Polling (Sondeo)}
+La ventaja intuitiva de este mecanismo es que el procesador siempre está pendiente de recibir una respuesta, por
+lo que en cuanto el dispositivo esté listo, la reacción es prácticamente inmediata, como bajar a preguntar al
+conserje y encontrarlo justo en ese momento. La desventaja, sin embargo, es evidente, dedicar al procesador a
+revisar constantemente un registro es un desgaste enorme de un recurso valioso. Por esa simple tarea de esperar,
+el CPU deja de poder hacer cualquier otra cosa.
+
+\subsubsection*{Interrupciones (\textit{Interrupts})}
+El mecanismo podría salir mal cuando el procesador se encuentra en medio de una tarea que requiere ejecutarse de
+forma continua y sin pausa. Si llega una interrupción en ese momento, la tarea queda suspendida a la mitad, lo
+que podría dejarla en un estado inconsistente o causar errores por no haber terminado correctamente el trabajo
+antes de atender al timbre.
+
+\subsubsection*{DMA (Acceso Directo a Memoria)}
+Aunque delegar toda la mudanza al asistente es muy eficiente, hay situaciones en las que no conviene esperar a
+que el camión esté completamente vacío para enterarse de lo que llegó. Algunos procesos necesitan saber cuándo
+se ha descargado cada elemento, ya sea porque son datos especiales que requieren verificación inmediata, o porque
+podría haber ``cajas sospechosas'' entre los datos recibidos, es decir, errores o datos corruptos que sería
+peligroso dejar pasar sin revisión hasta el final de la transferencia.
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 2: Investigación y Corrección de Hipótesis}
+% ----------------------------------------------------------------
+A continuación se presentan los tres mecanismos tal como los describe la referncia tomada de \textit{Operating System Concepts}, décima edición, de Abraham Silberschatz, Peter Baer Galvin y Greg Gagne:
+
+\subsubsection*{Polling}
+\begin{quote}
+  El protocolo básico de sondeo usa dos bits de estado: el \textit{busy bit} (indica si el controlador está
+  ocupado o libre) y el \textit{command-ready bit} (indica si hay un comando disponible para procesar).
+  El host coordina con el controlador mediante un protocolo de \textit{handshaking}: espera a que el
+  \textit{busy bit} se limpie, escribe el comando y el byte de datos, activa el \textit{command-ready bit},
+  y el controlador lo detecta, procesa el byte y limpia todos los bits al terminar.\\
+  
+  En el paso de espera, el host realiza \textit{busy-waiting}: lee el registro de estado en un bucle continuo
+  hasta que \texttt{busy} se limpie. Si el controlador responde rápido, el método es razonable en términos de
+  ciclos gastados. En muchas arquitecturas, sondear el estado de un dispositivo requiere únicamente tres
+  instrucciones de CPU, lo que lo hace eficiente en principio. Sin embargo, el sondeo se vuelve ineficiente
+  cuando el dispositivo raramente está listo y existe procesamiento útil pendiente. En ese escenario, es
+  preferible que el controlador notifique al CPU cuando esté disponible, mediante el mecanismo de interrupciones.
+\end{quote}
+
+\textbf{Contraste con la respuesta en el Módulo 1.}
+En la respuesta propuesta en el módulo se acertó en identificar la disponibilidad inmediata como la ventaja
+central y el desgaste del procesador como la desventaja. Lo que no se anticipó es que ese desgaste no es
+absoluto, sino condicional, la referencia señala que sondear un dispositivo puede requerir tan solo tres
+instrucciones de CPU, y que si el controlador responde rápido, el costo es razonable. El error en la hipótesis
+fue asumir que el desperdicio siempre ocurre, cuando en realidad solo se vuelve problemático cuando el
+dispositivo raramente está listo y hay procesamiento útil alternativo que el CPU podría estar realizando.
+
+\subsubsection*{Interrupciones (\textit{Interrupt-driven I/O})}
+\begin{quote}
+  El CPU dispone de una línea llamada \textit{interrupt-request line} que revisa después de ejecutar cada
+  instrucción. Al detectar una señal en esa línea, guarda su estado de ejecución actual y salta al manejador de
+  interrupciones cuya dirección está almacenada en una tabla fija. El manejador determina la causa de la
+  interrupción, la procesa y restaura el estado previo del procesador antes de retomar el flujo original.\\
+  
+  Los sistemas modernos gestionan desde cientos hasta cientos de miles de interrupciones por segundo.
+  Para hacerlo de forma controlada, se requieren capacidades avanzadas como las siguientes.
+  
+  \begin{itemize}
+  \item \textbf{Enmascaramiento de interrupciones:} la capacidad de diferir o
+    bloquear interrupciones mientras se ejecutan secciones críticas del kernel.
+  \item \textbf{Vectorización eficiente:} un vector de interrupciones con
+    direcciones de manejadores especializados, de modo que el sistema no tenga
+    que sondear cada dispositivo para identificar la fuente. Cuando hay más
+    dispositivos que entradas en el vector, se emplea \textit{interrupt chaining},
+    donde cada entrada apunta a una lista de manejadores que se recorren hasta
+    encontrar el adecuado.
+  \item \textbf{Niveles de prioridad:} la mayoría de las CPU tienen al menos
+    dos líneas de interrupción: una no enmascarable (reservada para errores
+    irrecuperables) y una enmascarable (usada por controladores de dispositivos,
+    que puede desactivarse durante secuencias críticas).
+  \item \textbf{Soporte para traps de software:} un mecanismo que permite a
+    las instrucciones solicitar la atención del sistema operativo directamente,
+    utilizado en llamadas al sistema.
+  \end{itemize}
+  
+  Para manejar la complejidad de los manejadores, muchos sistemas los dividen en dos fases: un manejador de
+  primera instancia (FLIH, \textit{First-Level Interrupt Handler}) que guarda el contexto y encola la operación,
+  y un manejador de segunda instancia (SLIH, \textit{Second-Level Interrupt Handler}) que ejecuta la operación
+  de forma planificada. En sistemas como Solaris, estos manejadores se implementan como hilos del kernel con
+  alta prioridad de planificación, permitiendo ejecución concurrente en arquitecturas multiprocesador.
+\end{quote}
+
+\textbf{Contraste con la respuesta en el Módulo 1.}
+La idea identificó correctamente el caso donde el problema aparece, una tarea que no puede interrumpirse a
+la mitad, la referencia formaliza esa intuición con el concepto de sección crítica y añade la solución que el
+sistema operativo tiene para ese problema, que es el enmascaramiento de interrupciones. Lo que no contemplamos en
+la idea fue que los sistemas modernos ya resuelven de forma estructurada el riesgo de interrumpir trabajo en
+curso, mediante niveles de prioridad, vectorización y la separación en manejadores de primera y segunda instancia
+(FLIH y SLIH). La intuición fue correcta en señalar el problema, pero subestimamos la sofisticación del
+ecosistema que existe precisamente para mitigarlo.
+
+\subsubsection*{Acceso Directo a Memoria (DMA)}
+\begin{quote}
+  Transferir datos byte a byte a través del CPU (modelo conocido como \textit{Programmed I/O}) resulta ineficiente para dispositivos de alto volumen como discos. El controlador DMA descarga ese trabajo del procesador.\\
+  
+  Para iniciar una transferencia, el host escribe un bloque de comandos DMA en memoria que contiene tres
+  elementos: un puntero al origen de los datos, un puntero al destino, y la cantidad de bytes a transferir.
+  El método \textit{scatter-gather} permite especificar múltiples transferencias no contiguas dentro de un solo
+  comando. El CPU escribe la dirección de ese bloque al controlador DMA y queda libre para continuar con otras
+  tareas.\\
+
+  El DMA opera el bus de memoria directamente, sin intervención del CPU. El protocolo de coordinación entre el
+  controlador DMA y el del dispositivo usa dos señales: \textit{DMA-request} (dato disponible para transferir) y
+  \textit{DMA-acknowledge} (confirmación de que la transferencia ocurrió). Al finalizar la transferencia
+  completa, el DMA interrumpe al CPU para notificarlo.\\
+
+  Durante la operación, el CPU pierde acceso momentáneo a la memoria principal en cada ciclo que el DMA necesita
+  el bus (\textit{cycle stealing}), aunque conserva acceso a su caché interna. Este costo generalmente se
+  justifica por la mejora en el rendimiento global del sistema.
+
+  Un inconveniente adicional tiene que ver con la protección de memoria. Dado que el destino ideal de una
+  transferencia DMA es el espacio del kernel (el espacio de usuario podría modificarse durante la transferencia),
+  a menudo se requiere una segunda copia de datos del espacio del kernel al espacio del usuario, lo que resulta
+  en un \textit{doble buffering} ineficiente. Por esa razón, los sistemas operativos modernos tienden a emplear
+  \textit{memory-mapping} para transferir datos de E/S directamente entre el dispositivo y el espacio de usuario.
+  Algunas arquitecturas van más lejos e implementan DVMA (\textit{Direct Virtual Memory Access}), que puede
+  transferir entre dos dispositivos mapeados en memoria sin intervención del CPU ni uso de memoria principal.
+\end{quote}
+
+\textbf{Contraste con la respuesta en el Módulo 1.}
+Nuestra idea apuntó a algo válido, hay casos en los que no conviene esperar al final de una transferencia para
+inspeccionar los datos, porque podrían llegar errores o información que requiere atención inmediata.
+Sin embargo, la referencia muestra que esa no es la razón principal por la que DMA no se usa en todas las
+transferencias, las razones formales tienen más que ver con el costo de configuración del canal DMA (que supera
+el beneficio en transferencias pequeñas), con la contención del bus de memoria durante el \textit{cycle stealing}
+, y con la complejidad que introduce el doble buffering cuando el destino debe ser el espacio del usuario.
+Con nuestra respuesta intuímos un problema real de validación de datos, pero la teoría formal lo ubica en un
+segundo plano frente a los costos de arquitectura que sí son los trade-offs determinantes.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 3: Protocolo Serial UART y Diagrama de Flujo}
+% ----------------------------------------------------------------
+
+\subsubsection*{¿Qué es UART?}
+
+UART (\textit{Universal Asynchronous Receiver-Transmitter}) es un protocolo de comunicación serial asíncrono
+ampliamente utilizado en sistemas embebidos para intercambiar datos entre dos dispositivos a través de una línea
+de transmisión. La palabra clave en su nombre es \textit{asíncrono}, a diferencia de los protocolos síncronos
+como SPI o I\textsuperscript{2}C, UART no utiliza una señal de reloj compartida entre el transmisor y el
+receptor, en su lugar, ambos dispositivos se ponen de acuerdo de antemano en una velocidad de transmisión
+común, y cada uno usa su propio reloj interno para sincronizarse durante la recepción de cada byte.
+
+\subsubsection*{Conceptos clave del protocolo}
+\begin{itemize}
+\item \textbf{Baud Rate.}
+  El \textit{baud rate} es la velocidad de transmisión, expresada en bits por segundo (bps), determina cuánto
+  tiempo dura cada bit en la línea, por ejemplo, con una velocidad de 9600 baudios, cada bit ocupa
+  aproximadamente 104 microsegundos; con 115200 baudios (la velocidad más común en sistemas modernos), cada bit
+  dura aproximadamente 8.68 microsegundos. Que ambos dispositivos usen exactamente el mismo \textit{baud rate} es
+  esencial, una diferencia pequeña puede acumular error suficiente como para corromper los datos al final de un
+  byte.\\
+  
+\item \textbf{Start Bit.}
+  La línea UART se mantiene en estado alto lógico (\texttt{1}) cuando está en reposo, condición llamada
+  \textit{idle}, cuando el transmisor quiere enviar un byte, lo primero que hace es bajar la línea a estado bajo
+  lógico (\texttt{0}) durante exactamente un período de \textit{baud rate}. Esa transición de \texttt{1} a
+  \texttt{0} es el \textit{start bit}, y su función es alertar al receptor de que está por llegar un byte, el
+  receptor usa esta transición como punto de sincronización para comenzar a muestrear los bits subsiguientes.\\
+
+\item \textbf{Data Bits.}
+  Después del \textit{start bit} vienen los bits de datos, que normalmente son 8, aunque el protocolo admite
+  configuraciones de 5 a 9 bits, se transmiten en orden del bit menos significativo al más significativo
+  (LSB primero), cada bit dura exactamente un período de \textit{baud rate}, y el receptor los muestrea en el
+  centro de ese período para maximizar el margen frente a ruido o ligeras diferencias de reloj.\\
+  
+\item \textbf{Stop Bit.}
+  Al finalizar los bits de datos, el transmisor regresa la línea al estado alto (\texttt{1}) durante uno o dos
+  períodos de \textit{baud rate}, ese es el \textit{stop bit}, y tiene dos propósitos: confirmar al receptor que
+  el byte llegó completo (si la línea no está en alto en este momento, se produce un error de \textit{framing}),
+  y garantizar un período mínimo de reposo antes del siguiente byte.\\
+  
+\item \textbf{Sin bit de paridad (en la configuración más común).}
+  Muchas implementaciones operan en modo \texttt{8N1}, 8 bits de datos, sin paridad y 1 \textit{stop bit}, es la
+  configuración por defecto en la mayoría de las herramientas y la que usa la plantilla de código de esta
+  práctica.
+\end{itemize}
+
+\subsubsection*{Diagrama de flujo, Recepción de un byte UART}
+En el siguiente diagrama describimos paso a paso la lógica que debe seguir el hardware o software para recibir
+correctamente un solo byte a través de una línea UART, con los tiempos relativos al \textit{baud rate}.
+
+\begin{center}
+  \scalebox{0.85}{
+\begin{tikzpicture}[node distance=0.55cm and 1.8cm, auto]
+
+    % Nodos
+    \node (start) [startstop] {INICIO};
+
+    \node (idle) [process, below=of start]
+        {Línea en estado IDLE\\(nivel lógico \texttt{1})};
+
+    \node (wait_start) [decision, below=of idle, yshift=-0.3cm]
+        {¿Flanco bajante\\(1 $\to$ 0)?};
+
+    \node (wait_half) [process, below=of wait_start, yshift=-0.5cm]
+        {Esperar \(\tfrac{1}{2}\) período\\del Baud Rate\\(centro del Start Bit)};
+
+    \node (verify_start) [decision, below=of wait_half, yshift=-0.3cm]
+        {¿Línea sigue en\\bajo (\texttt{0})?};
+
+    \node (false_start) [process, right=2.6cm of verify_start]
+        {\textit{False start}\\Descartar,\\volver a IDLE};
+
+    \node (init_buf) [process, below=of verify_start, yshift=-0.5cm]
+        {Inicializar buffer\\y contador de bits (n = 0)};
+
+    \node (wait_full) [process, below=of init_buf]
+        {Esperar 1 período\\completo del Baud Rate\\(centro del Data Bit n)};
+
+    \node (sample) [process, below=of wait_full]
+        {Muestrear línea,\\guardar bit en buffer[n]};
+
+    \node (n_check) [decision, below=of sample, yshift=-0.3cm]
+        {¿n \textless{} 8?};
+
+    \node (inc_n) [process, right=2.6cm of n_check]
+        {n = n + 1\\(siguiente bit)};
+
+    \node (wait_stop) [process, below=of n_check, yshift=-0.5cm]
+        {Esperar 1 período\\del Baud Rate\\(Stop Bit)};
+
+    \node (verify_stop) [decision, below=of wait_stop, yshift=-0.3cm]
+        {¿Línea en alto (\texttt{1})?};
+
+    \node (framing_err) [process, right=2.6cm of verify_stop]
+        {Error de Framing\\Descartar byte,\\volver a IDLE};
+
+    \node (store) [process, below=of verify_stop, yshift=-0.5cm]
+        {Byte válido,\\almacenar/procesar buffer};
+
+    \node (end) [startstop, below=of store]
+        {Volver a IDLE};
+
+    % Flechas principales (columna central)
+    \draw [arrow] (start)         -- (idle);
+    \draw [arrow] (idle)          -- (wait_start);
+    \draw [arrow] (wait_start)    -- node[right, font=\small] {Sí} (wait_half);
+    \draw [arrow] (wait_half)     -- (verify_start);
+    \draw [arrow] (verify_start)  -- node[right, font=\small] {Sí} (init_buf);
+    \draw [arrow] (init_buf)      -- (wait_full);
+    \draw [arrow] (wait_full)     -- (sample);
+    \draw [arrow] (sample)        -- (n_check);
+    \draw [arrow] (n_check)       -- node[right, font=\small] {No (8 bits)} (wait_stop);
+    \draw [arrow] (wait_stop)     -- (verify_stop);
+    \draw [arrow] (verify_stop)   -- node[right, font=\small] {Sí} (store);
+    \draw [arrow] (store)         -- (end);
+
+    % Flechas de retorno (bucle "No" de wait_start)
+    \draw [arrow] (wait_start.west)
+        -- node[above, font=\small] {No}
+        ++(-1.1,0) |- (idle.west);
+
+    % Flechas laterales de error
+    \draw [arrow] (verify_start.east)
+        -- node[above, font=\small] {No} (false_start);
+    \draw [arrow] (false_start.north)
+        |- (idle.east);
+
+    \draw [arrow] (n_check.east)
+        -- node[above, font=\small] {Sí} (inc_n);
+    \draw [arrow] (inc_n.north)
+        |- (wait_full.east);
+
+    \draw [arrow] (verify_stop.east)
+        -- node[above, font=\small] {No} (framing_err);
+    \draw [arrow] (framing_err.east)
+        -- ++ (1.1,0)
+        |- (idle.east);
+
+    % Volver a IDLE desde end
+    \draw [arrow] (end.south)
+        -- ++(0,-0.4)
+        -- ++(-4.3,0)
+        |- (idle.west);
+
+\end{tikzpicture}
+}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ----------------------------------------------------------------
+\subsection*{Módulo 4: Caso de Estudio}
+% ----------------------------------------------------------------
+
+\subsubsection*{Análisis del correo, frases clave y su traducción técnica}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{\arabic*.}]
+  
+\item \textit{\textbf{``deleguemos todo el movimiento de arreglos masivos de datos directamente hacia la memoria sin que el CPU intervenga''}}\\
+  
+  \textit{Traducción técnica:} Esta frase describe el patrón de uso de DMA, pensado para transferencias de gran
+  volumen donde el CPU no debe participar byte a byte. Sin embargo, el gerente nos aclara explícitamente que esto
+  aplica al sistema final, no al prototipo de hoy. Por lo que fue considerada ruido técnico para el escenario
+  inmediato, aunque útil para entender la arquitectura final.
+  
+\item \textit{\textbf{``reciba una clave de validación de exactamente 16 bytes por el puerto serial''}}\\
+
+  \textit{Traducción técnica:} La transferencia es pequeña, acotada y completamente conocida en tamaño,
+  inicializar un canal DMA para mover 16 bytes introduce una sobrecarga de configuración totalmente
+  desproporcionada, se favorecen mecanismos directos y simples como Polling.
+  
+\item \textit{\textbf{``solución más directa, básica y rudimentaria que puedan teclear en 45 minutos''}}\\
+  
+  \textit{Traducción técnica:} Se prioriza la baja complejidad de implementación y el tiempo corto de desarrollo,
+  lo que descarta cualquier mecanismo que requiera configurar subsistemas adicionales de hardware, como canales
+  DMA o vectores de interrupción.
+  
+\item \textit{\textbf{``máquina host muy vieja y errática [...] a veces manda un par de caracteres, se pasma dos o tres segundos, y luego manda el resto''}}\\
+  
+  \textit{Traducción técnica:} La entrada es lenta, irregular e impredecible en su temporización, lo que
+  significa que el receptor necesita un mecanismo que pueda esperar indefinidamente entre bytes sin perder
+  sincronía, lo cual es precisamente la fortaleza del Polling en modo bloqueante.
+  
+\item \textit{\textbf{``es un crimen tener al procesador congelado y bloqueado esperando [...] pero en este milisegundo exacto del encendido el chip no tiene absolutamente ninguna otra tarea asignada''}}\\
+  
+  \textit{Traducción técnica:} El gerente reconoce el costo teórico del \textit{busy waiting}, pero lo anula con
+  el contexto, el CPU no tiene ninguna otra tarea que realizar durante el arranque. El costo de ocupar ciclos de
+  CPU en Polling es cero desde la perspectiva del sistema, porque no hay trabajo alternativo que se esté
+  perdiendo.
+  
+\item \textit{\textbf{``tienen que bloquear a nivel físico cualquier evento, alarma o señal asíncrona externa''}}\\
+  
+  \textit{Traducción técnica:} Se deben deshabilitar las interrupciones a nivel del NVIC del procesador durante
+  toda la fase de arranque, esta instrucción descarta explícita y completamente el uso de
+  \textit{Interrupt-driven I/O}.
+  
+\item \textit{\textbf{``el flujo de lectura debe ser lineal y blindado contra avisos externos''}}\\
+  
+  \textit{Traducción técnica:} Se requiere ejecución secuencial, determinista y sin desvíos de flujo provocados
+  por señales externas, es la descripción exacta de lo que ofrece Polling, un bucle de espera activa sin cambios
+  de contexto, sin vectores de interrupción, sin handlers.  
+\end{enumerate}
+
+El único mecanismo coherente con la totalidad de los requerimientos anteriores es \textbf{Polling}, para defender
+esta decisión es necesario que trnasformemos las preocupaciones del gerente en conceptos de SO's.\\
+
+El escenario que describe el correo corresponde a una fase de arranque seguro donde el sistema se encuentra en un
+estado privilegiado mínimo, no hay sistema operativo corriendo, no hay procesos planificados, no hay hilos del
+kernel activos, el único comportamiento esperado del procesador durante estos instantes es esperar y capturar
+exactamente 16 bytes.\\
+
+En primer lugar, el correo prohíbe de forma explícita cualquier señal asíncrona externa, lo que equivale a
+deshabilitar el enmascaramiento de interrupciones en el NVIC, con las interrupciones bloqueadas, el mecanismo de
+\textit{Interrupt-driven I/O} queda físicamente imposibilitado, el hardware simplemente no puede notificar al CPU
+de la llegada de datos. Polling, al ser un bucle de lectura activa sobre los registros del periférico, no
+depende de ninguna notificación externa y funciona correctamente con interrupciones deshabilitadas.\\
+En segundo lugar, el principal argumento en contra del Polling es su costo en ciclos de CPU desperdiciados
+(\textit{busy waiting}), no obstante, ese costo solo existe cuando hay otras tareas que podrían estar utilizando
+esos ciclos. Durante la fase de arranque descrita en el correo, no existe ninguna otra tarea, el procesador no
+tiene nada más que hacer, por lo que el \textit{busy waiting} no desperdicia ningún recurso que pudiera
+aprovecharse de otra forma, el trade-off desaparece.\\
+En tercer lugar, la transferencia de 16 bytes es un volumen de datos trivial, inicializar un canal DMA requiere
+configurar registros de dirección origen, dirección destino, contador de bytes y señales de control, todo ello
+más costoso en tiempo de desarrollo y en ciclos de configuración que simplemente leer 16 bytes en un bucle, el gerente lo expresa claramente al pedir que no se pierda tiempo inicializando subsistemas complejos.\\
+
+Las interrupciones requieren que el NVIC esté habilitado y que exista un vector de interrupciones configurado con
+la dirección del manejador correspondiente, el auditor de seguridad nos indica que durante el arranque se deben
+bloquear a nivel físico todas las señales asíncronas externas, lo que en términos de arquitectura ARM equivale a
+ejecutar las instrucciones \texttt{CPSID i} o deshabilitar la IRQ correspondiente en el NVIC. Con esa restricción
+activa, el controlador UART no puede generar interrupciones al CPU, por lo que el mecanismo queda inoperable para
+este escenario.\\
+
+DMA por otro lado está pensado para mover bloques grandes de datos sin que el CPU intervenga byte a byte, lo que
+tiene sentido cuando esos bloques son de cientos o miles de bytes y el CPU tiene otras tareas más urgentes que
+atender durante la transferencia. En este caso, la transferencia es de 16 bytes, el CPU no tiene otras tareas y
+el objetivo es una implementación básica en 45 minutos, el costo de configurar un canal DMA es mayor que el
+problema que resolvería, el gerente lo descarta explícitamente al pedir que se ignore la sugerencia del
+arquitecto de software (que describía DMA) para esta etapa de arranque.
+
+\begin{center}
+  \begin{tabular}{|l|c|l|}
+    \hline
+    \textbf{Mecanismo} & \textbf{Viable} & \textbf{Razón principal} \\
+    \hline
+    Polling             & Sí  & Determinista, simple, funciona sin interrupciones \\
+    Interrupciones      & No  & Requieren IRQ habilitada; el auditor las prohíbe \\
+    DMA                 & No  & Sobrecomplejo para 16 bytes; gerente lo descarta \\
+    \hline
+  \end{tabular}
+\end{center}
+
+% ----------------------------------------------------------------
+\subsubsection*{Implementación Práctica en Wokwi}
+% ----------------------------------------------------------------
+Una vez que el análisis del correo dejó claro que Polling es el único mecanismo coherente con todos los
+requerimientos del escenario, se procedió a completar la plantilla de código provista en el Anexo del manual.
+A continuación presentamos el archivo \texttt{main.c} completo con cada bloque TODO resuelto y comentado para
+dejar explícita la razón arquitectónica de cada decisión.\\
+
+\textbf{Sobre los TODO 1 y TODO 2.}\\
+La plantilla reservaba estos espacios para incluir librerías adicionales de hardware
+(como \texttt{hardware/irq.h} para Interrupciones o \texttt{hardware/dma.h} para DMA) y para definir una Rutina
+de Servicio de Interrupción (ISR), dado que la arquitectura elegida es Polling, ninguno de estos subsistemas se
+inicializa, y ambos bloques se dejan vacíos de forma intencional.\\
+
+\textbf{Sobre el TODO 3: inicialización del UART.}\\
+Se inicializa el periférico con \texttt{uart\_init}, que configura los registros internos del controlador
+\texttt{UART0} del RP2040 con el \textit{baud rate} de 115200, luego se asignan los pines físicos 0 y 1 a
+su función de hardware UART mediante \texttt{gpio\_set\_function}, mapeando el pin 0 como TX y el pin 1 como RX,
+esta es la configuración mínima e indispensable para que el periférico pueda comunicarse con la máquina host.\\
+
+\textbf{Sobre el TODO 4: configuración del mecanismo de Polling.}\\
+Este bloque traduce directamente las dos restricciones técnicas más importantes del caso de estudio, la llamada
+a \texttt{irq\_set\_enabled(UART0\_IRQ, false)} deshabilita en el NVIC (el controlador de interrupciones del
+núcleo ARM Cortex-M0+) la IRQ específica del periférico UART0, cumpliendo la instrucción del auditor de bloquear
+cualquier señal asíncrona a nivel físico. La llamada a \texttt{uart\_set\_fifo\_enabled(UART\_ID, false)}
+desactiva el buffer FIFO de hardware del UART, de modo que cada byte quede disponible para lectura de forma
+inmediata en el registro de datos, sin depender de un umbral de llenado que podría introducir comportamiento no
+determinista en la lectura.\\
+
+\textbf{Sobre el TODO 5: bucle principal de recepción.}\\
+La lógica de recepción consiste en dos bucles anidados, el bucle exterior controla cuántos bytes se han
+capturado y no termina hasta tener exactamente \texttt{KEY\_LENGTH} (16 bytes), el bucle interior es el núcleo
+del Polling: \texttt{uart\_is\_readable()} consulta el bit de estado del registro del periférico UART para saber
+si hay un byte disponible; mientras no lo haya, se ejecuta \texttt{tight\_loop\_contents()}, que en la
+arquitectura ARM se traduce en una instrucción NOP que mantiene al CPU ocupado sin efectos secundarios.
+Cuando el byte está disponible, \texttt{uart\_getc()} lo lee del registro y lo almacena en
+\texttt{challenge\_key}, el implementado eco mediante \texttt{printf} permite verificar en la terminal del
+simulador que cada carácter fue recibido correctamente:
+
+\bigskip
+\bigskip
+
+\begin{lstlisting}[style=modernc, caption={main.c: driver de arranque seguro implementado con Polling}]
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/uart.h"
+
+/* ====================================================================
+   TODO 1:
+   No incluimos bibliotecas adicionales dado que Polling no requiere
+   ni hardware/irq.h (Interrupciones) ni hardware/dma.h (DMA)
+   Ambos mecanismos los descartamos por el analisis del caso de estudio
+   ==================================================================== */
+
+//Definicion de parametros del hardware
+#define UART_ID uart0
+#define BAUD_RATE 115200
+#define UART_TX_PIN 0
+#define UART_RX_PIN 1
+//Requerimiento del caso de estudio: Exactamente 16 bytes
+#define KEY_LENGTH 16
+//Buffer global para guardar la clave
+char challenge_key[KEY_LENGTH + 1];
+//Variable de control (Util si tu implementacion es asincrona)
+volatile bool key_received = false ;
+
+/* ================================================================
+   TODO 2:
+   No se define ninguna ISR pues con Polling y las interrupciones 
+   del UART deshabilitadas, el hardware nunca generara una senial 
+   de interrupcion, por lo que un handler aqui nunca seria invocado
+   ================================================================ */
+
+
+void
+secure_boot_init()
+{
+  //Inicializa la salida estandar (para ver los printf en consola)
+  stdio_init_all();
+  
+  /* ===================================================================
+     TODO 3:
+     Inicializacion Basica del UART
+     Configuramos el periferico con el ID y el Baud Rate definidos
+     para despues mapear los pines fisicos a su funcion de hardware UART
+     =================================================================== */
+  //Arrancamos el controlador UART0 del RP2040 con 115200 bps
+  uart_init(UART_ID, BAUD_RATE);
+  
+  //Asignamos el pin 0 (TX) y el pin 1 (RX) a la funcion UART
+  gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+  gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+  
+  /* ==================================================================
+     TODO 4:
+     Configuracion especifica del mecanismo (Polling)
+     Definimos dos acciones criticas derivadas del analisis del correo:
+     =============================================================== */
+  
+  /* Deshabilitamos en el NVIC la IRQ del UART0
+     Con esto implementamos la orden del auditor de seguridad "bloquear
+     a nivel fisico cualquier evento o senal asincrona externa" */
+  irq_set_enabled(UART0_IRQ, false); //El hardware no puede interrumpir al CPU
+
+  /* Desactivamos el buffer FIFO del UART.
+     Sin FIFO, cada byte queda disponible de inmediato en el
+     registro de datos, lo que hace al sondeo completamente
+     determinista, un byte listo = una lectura, sin umbrales */
+  uart_set_fifo_enabled(UART_ID, false);
+}
+
+int
+main()
+{
+  //Llamamos a la configuracion inicial
+  secure_boot_init();
+  //Damos un segundo para que la terminal serial conecte antes de imprimir
+  sleep_ms(1000);
+  
+  printf("\n === MODULO DE ARRANQUE SEGURO ===\n");
+  printf("Sistema en modo bloqueo. Esperando clave de %d bytes...\n", KEY_LENGTH);
+  printf("Ingresa los caracteres en la terminal:\n >");
+  
+  /* ===============================================================
+     TODO 5:
+     Logica principal de recepcion mediante Polling
+
+     Estructura de dos bucles anidados:
+     - Bucle exterior (while bytes_read < KEY_LENGTH):
+         Mantiene al programa capturando hasta completar los 16 bytes.
+         El CPU no puede abandonar este punto; su unica tarea es
+         esta recepcion, exactamente como describia el correo.
+
+       - Bucle interior (!uart_is_readable):
+         Es el nucleo del Polling, uart_is_readable() consulta el
+         bit RXFE (RX FIFO Empty) del registro de estado del UART
+         Mientras el bit indique "sin datos", se ejecuta
+         tight_loop_contents(), una instruccion NOP de ARM que evita
+         efectos secundarios indeseados durante la espera activa.
+
+       Cuando el byte esta listo (uart_is_readable devuelve true),
+       uart_getc() lo lee del registro de datos del periferico y
+       lo almacena en challenge_key. El printf del eco permite
+       confirmar en la terminal del simulador que cada caracter
+       fue recibido correctamente por el driver.
+     =============================================================== */
+  
+  int bytes_read = 0;
+  //Esperamos hasta tener exactamente 16 bytes
+  while (bytes_read < KEY_LENGTH) {
+    /* Busy Waiting:
+       El CPU interroga al hardware en cada ciclo preguntando
+       si ya hay un dato listo en el registro RX del UART */
+    while (!uart_is_readable(UART_ID))
+      tight_loop_contents(); //NOP de ARM para no quemar el CPU innecesariamente
+    
+    //Si salimos del bucle interior, significa que hay un byte listo
+    challenge_key[bytes_read] = uart_getc(UART_ID); //Lo leemos y lo guardamos
+    
+    //Hacemos un 'eco' hacia la terminal para confirmar la recepcion
+    printf("%c", challenge_key[bytes_read]); 
+    bytes_read++;
+  }
+  
+  key_received = true;//Confirmamos que terminamos
+  
+  // --- EL CODIGO TERMINA AQUI ---
+  //Aseguramos que el arreglo sea un string valido en C para poder imprimirlo
+  challenge_key[KEY_LENGTH] = '\0';
+
+  //Si el flujo del programa llega a esta linea, la recepcion termino
+  printf("\n \n[EXITO] Clave recibida: %s\n", challenge_key);
+  printf("[SISTEMA] Validando integridad...\n");
+  printf("[SISTEMA] Levantando RTOS...\n");
+ 
+  //Bucle infinito simulando el ciclo de vida normal del sistema operativo
+  while(1)
+    tight_loop_contents();
+  
+  return 0;
+}
+\end{lstlisting}
+
+\bigskip
+
+\subsubsection*{Resultado en el simulador}
+
+La salida obtenida al ejecutar el código en Wokwi e ingresando 16 caracteres, fue la siguiente:
+
+\begin{Verbatim}[frame=single, fontsize=\footnotesize]
+=== MODULO DE ARRANQUE SEGURO ===
+Sistema en modo bloqueo. Esperando clave de 16 bytes...
+Ingresa los caracteres en la terminal:
+ >123456789ABCDEFH
+
+[EXITO] Clave recibida: 123456789ABCDEFH
+[SISTEMA] Validando integridad...
+[SISTEMA] Levantando RTOS...
+\end{Verbatim}
+
+El programa arrancó correctamente y entró de inmediato en el modo de bloqueo, lo que confirma que las
+interrupciones del UART quedaron deshabilitadas y que el flujo de ejecución es completamente lineal desde el
+primer byte, el eco de cada carácter en la línea del prompt muestra que el bucle de Polling detectó y leyó cada
+byte en el orden en que llegó, sin pérdidas ni reordenamientos.\\
+
+Al completarse el byte número 16, el bucle exterior terminó de forma natural y el programa avanzó a las líneas de
+validación e inicio del RTOS, lo que demuestra que la condición de parada \texttt{bytes\_read < KEY\_LENGTH}
+funcionó con precisión, la clave almacenada en \texttt{challenge\_key} coincide exactamente con los 16
+caracteres ingresados, sin caracteres extra ni faltantes.\\
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Conclusiones}
+% ================================================================
+
+Esta práctica demostró que elegir un mecanismo de \textbf{E/S} no es buscar el más eficiente en abstracto,
+sino el más adecuado para el contexto específico del problema.\\
+
+El \textbf{Módulo 1} mostró que la intuición identifica los rasgos más visibles de cada mecanismo, pero los
+trata como absolutos, el \textbf{Módulo 2} corrigió ese error: el costo del Polling depende de si hay trabajo
+alternativo pendiente, las Interrupciones tienen mecanismos formales para proteger secciones críticas, y DMA no
+se descarta por problemas de validación sino por los costos reales de configuración, contención de bus y
+doble buffering.\\
+
+El \textbf{Módulo 3} confirmó que UART y Polling son aliados naturales, ambos son deterministas, simples y no
+dependen de subsistemas externos de sincronización, el \textbf{Módulo 4} integró todo lo anterior, el análisis
+del correo redujo un escenario ambiguo a tres restricciones concretas (sin IRQ, flujo lineal, transferencia
+pequeña) que apuntaron todas al mismo mecanismo. La simulación lo confirmó, el programa capturó exactamente 16
+bytes, esperó indefinidamente ante entradas incompletas y nunca fue desviado por señales externas, que es
+exactamente el comportamiento que el análisis predijo.
+\end{document}

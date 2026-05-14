@@ -1,0 +1,645 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+
+\usepackage{mdframed, enumitem}
+\usepackage{geometry, amsmath, amssymb}
+\usepackage{tcolorbox, tikz, graphicx, xcolor}
+\usepackage{titlesec, fancyhdr}
+\usepackage{booktabs, array, enumitem, mdframed}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+
+\geometry{
+  left=2.5cm, right=2.5cm,
+  top=3cm,    bottom=3cm
+}
+
+\usetikzlibrary{arrows.meta, positioning}
+
+\definecolor{azuloscuro}{RGB}{13, 71, 161}
+\definecolor{azulclaro}{RGB}{227, 242, 253}
+\definecolor{grisclaro}{RGB}{245, 245, 245}
+\definecolor{naranja}{RGB}{230, 81, 0}
+\definecolor{naranjafondo}{RGB}{255, 243, 224}
+\definecolor{verde}{RGB}{27, 94, 32}
+\definecolor{verdefondo}{RGB}{232, 245, 233}
+\definecolor{rojofondo}{RGB}{255, 235, 238}
+\definecolor{rojo}{RGB}{183, 28, 28}
+\definecolor{moradofondo}{RGB}{243, 229, 245}
+\definecolor{morado}{RGB}{106, 27, 154}
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{graybox}{HTML}{F4F4F4}
+\definecolor{accentblue}{HTML}{1A167A}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{azuloscuro}{\textbf{Sistemas Operativos}}}
+\fancyhead[R]{\small\textcolor{azuloscuro}{Sistemas de Archivos}}
+\fancyfoot[C]{\small\textcolor{gray}{\thepage}}
+\renewcommand{\headrulewidth}{0.6pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{azuloscuro}\leaders\hrule height \headrulewidth\hfill}}
+
+\titleformat{\section}[block]
+  {\large\bfseries\color{azuloscuro}}
+  {\thesection.}{0.5em}{}
+  [\vspace{-0.3em}\textcolor{azuloscuro}{\rule{\linewidth}{0.6pt}}]
+
+\titleformat{\subsection}[block]
+  {\normalsize\bfseries\color{azuloscuro!80}}
+  {\thesubsection.}{0.5em}{}
+
+% Cajas de color reutilizables
+\tcbuselibrary{skins, breakable}
+
+\newtcolorbox{zfsbox}{
+  colback=azulclaro,
+  colframe=azuloscuro,
+  fonttitle=\bfseries\color{white},
+  title=ZFS - Zettabyte File System,
+  sharp corners=south,
+  top=6pt, bottom=6pt, left=8pt, right=8pt
+}
+
+\newtcolorbox{btrfsbox}{
+  colback=verdefondo,
+  colframe=verde,
+  fonttitle=\bfseries\color{white},
+  title=Btrfs - B-Tree File System,
+  sharp corners=south,
+  top=6pt, bottom=6pt, left=8pt, right=8pt
+}
+
+\newtcolorbox{comparabox}{
+  colback=naranjafondo,
+  colframe=naranja,
+  fonttitle=\bfseries\color{white},
+  title=Comparativa rápida,
+  sharp corners=south,
+  top=6pt, bottom=6pt, left=8pt, right=8pt
+}
+
+\newtcolorbox{fichabox}[1]{
+  colback=moradofondo,
+  colframe=morado,
+  fonttitle=\bfseries\color{white},
+  title=#1,
+  sharp corners=south,
+  top=6pt, bottom=6pt, left=8pt, right=8pt
+}
+
+\begin{document}
+
+\input{portada}
+
+\newpage
+
+\section{Introducción}
+Los sistemas de archivos son uno de los componentes más críticos de cualquier sistema operativo, determinan cómo
+se almacenan, organizan, protegen y recuperan los datos en los medios físicos. A lo largo de las últimas décadas,
+la demanda de mayor capacidad, integridad y flexibilidad impulsó el surgimiento de sistemas de archivos de nueva
+generación que van mucho más allá de los tradicionales FAT, NTFS o ext4.\\
+
+\begin{itemize}
+\item \textbf{ZFS (Zettabyte File System):} concebido por Sun Microsystems en 2001 y lanzado en 2005, revolucionó
+  el concepto de almacenamiento empresarial al fusionar el sistema de archivos con el gestor de volúmenes,
+  ofreciendo integridad de datos de extremo a extremo y capacidades casi ilimitadas.
+\item \textbf{Btrfs (B-Tree File System):} propuesto en 2007 y adoptado por el kernel Linux en 2009, fue diseñado
+  como el sucesor natural de ext4, trayendo instantáneas, subvolúmenes y compresión transparente de forma nativa
+  al ecosistema Linux.
+\end{itemize}
+
+\section{ZFS (Zettabyte File System)}
+ZFS fue diseñado e implementado por un equipo de ingenieros de \textbf{Sun Microsystems} liderado por
+\textbf{Jeff Bonwick} y \textbf{Matthew Ahrens}, el proyecto inició formalmente en \textbf{2001} con el objetivo
+de crear un sistema de archivos radicalmente diferente para el sistema operativo \textbf{Solaris}. Las siglas
+originalmente significaban \emph{Zettabyte File System}, aunque posteriormente el proyecto adoptó el nombre como
+acrónimo recursivo.\\
+
+El anuncio oficial de ZFS se produjo en \textbf{septiembre de 2004}, el código fuente fue integrado en la rama
+principal de desarrollo de Solaris el 31 de octubre de 2005 y puesto en producción el
+\textbf{16 de noviembre de 2005} como parte de la compilación 27 de OpenSolaris.
+
+En 2010, tras la adquisición de Sun por parte de Oracle, el proyecto de código abierto continuó a través de la
+comunidad bajo el nombre \textbf{OpenZFS} (fundado en 2013), que hoy mantiene la implementación para Linux
+(\texttt{ZFS on Linux}), FreeBSD, macOS y otros sistemas.
+
+\begin{mdframed}[backgroundcolor=azulclaro, linecolor=azuloscuro, linewidth=1pt, roundcorner=4pt]
+  \textbf{Licencia:} ZFS fue originalmente liberado bajo la \textbf{CDDL}
+  (\emph{Common Development and Distribution License}), que es código abierto pero incompatible con la GPL. Por
+  esta razón, ZFS no puede incluirse directamente en el kernel Linux (que usa GPL), sino que se distribuye como
+  módulo externo mediante el proyecto \textbf{OpenZFS / ZFS on Linux}.
+\end{mdframed}
+
+\subsection{Propósito y problema que resolvía}
+Los sistemas de archivos de la época (UFS, ext2, ext3) requerían una capa separada de gestión de volúmenes
+(LVM, mdadm) para manejar múltiples discos, lo que generaba:
+
+\begin{itemize}
+\item Complejidad administrativa por capas independientes.
+\item Falta de visibilidad del sistema de archivos sobre la disposición física de los datos.
+\item Incapacidad para detectar y corregir la \emph{corrupción silenciosa} (\emph{bit rot}), es decir, la
+  degradación de datos en disco sin que ningún sistema de nivel superior lo advirtiera.
+\item Necesidad de ejecutar \texttt{fsck} tras cada apagado abrupto, sin garantía de éxito.
+\end{itemize}
+
+ZFS fue diseñado para resolver todos estos problemas de raíz, fusionando el gestor de volúmenes y el sistema de
+archivos en una sola entidad coherente con visibilidad completa sobre el hardware.
+
+\subsection{Innovación principal}
+La innovación de ZFS es su modelo de \textbf{integridad de extremo a extremo basado en árboles de Merkle}.
+Cada bloque de datos posee un \emph{checksum} (suma de comprobación) de 256 bits almacenado no junto al bloque,
+sino en el \emph{puntero del bloque padre}, formando un árbol jerárquico hasta la raíz. Cuando ZFS lee un dato,
+recalcula el \emph{checksum} al vuelo; si no coincide, y el pool tiene redundancia, repara el bloque corrupto
+automáticamente sin intervención del administrador.
+
+\subsection{Código abierto y propiedad}
+\begin{itemize}
+\item \textbf{Creador original:} Sun Microsystems (hoy Oracle).
+\item \textbf{Proyecto activo:} OpenZFS (comunidad independiente desde 2013).
+\item \textbf{Licencia:} CDDL (código abierto, incompatible con GPL).
+\item \textbf{Estado:} Software libre de código abierto con gobernanza comunitaria.
+\end{itemize}
+
+\subsection{Sistemas operativos donde es más usado}
+ZFS es el sistema de archivos nativo de \textbf{FreeBSD} (donde está integrado directamente en el kernel) y de
+distribuciones derivadas como \textbf{TrueNAS} (anteriormente FreeNAS) e \textbf{illumos} (sucesor abierto de
+OpenSolaris). En Linux se usa a través del módulo \texttt{zfs-dkms} o \texttt{zfs-linux}, popularizado por
+distribuciones como \textbf{Ubuntu} (que lo soporta oficialmente desde 19.10) y \textbf{Proxmox VE}.
+
+\subsection{Uso típico}
+\begin{itemize}
+\item Servidores empresariales de almacenamiento (\emph{storage servers}).
+\item Centros de datos y entornos \emph{cloud} privados.
+\item Arreglos NAS de alta capacidad y alta disponibilidad (TrueNAS).
+\item Entornos de virtualización (Proxmox, bhyve) donde la integridad y los snapshots son críticos.
+\item Sistemas de respaldo y archivo a largo plazo.
+\end{itemize}
+
+\subsection{Arquitectura e implementación}
+ZFS no es únicamente un sistema de archivos; es al mismo tiempo un \textbf{gestor de volúmenes} y un
+\textbf{controlador RAID} fusionados. Al prescindir de capas intermedias, ZFS tiene visibilidad y control
+absolutos sobre los discos físicos.
+
+\subsubsection{Storage Pools (\texttt{zpool})}
+En lugar de crear particiones rígidas, ZFS agrupa los dispositivos físicos en un \emph{pool} de almacenamiento.
+Los sistemas de archivos (\emph{datasets}) se crean dentro del pool y comparten el espacio libre dinámicamente.
+Los pools pueden configurarse en distintos modos:
+
+\begin{itemize}
+\item \textbf{Simple (stripe):} uno o más dispositivos sin redundancia.
+\item \textbf{Mirror:} dos o más dispositivos en espejo.
+\item \textbf{RAID-Z1 / Z2 / Z3:} equivalentes a RAID-5, RAID-6 y RAID-7, pero sin el defecto del
+  ``agujero de escritura'' (\emph{write hole}) gracias al modelo \emph{copy-on-write}.
+\end{itemize}
+
+Adicionalmente, es posible agregar dispositivos de caché de lectura (\emph{L2ARC}) y de registro de escritura
+síncrona (\emph{ZIL/SLOG}), habitualmente SSD, para mejorar el rendimiento sin sacrificar la integridad.
+
+\subsubsection{Datasets y zvols}
+Dentro de un \emph{zpool} se pueden crear dos tipos de \emph{datasets}:
+
+\begin{itemize}
+\item \textbf{Filesystem:} equivalente a un sistema de archivos tradicional con punto de montaje configurable,
+  cuotas y reservas de espacio.
+\item \textbf{Zvol:} dispositivo de bloques virtual accesible desde \texttt{/dev/zvol}, útil como disco virtual
+  para máquinas virtuales o como volumen de intercambio (\emph{swap}).
+\end{itemize}
+
+\subsubsection{Copy-on-Write (CoW) transaccional}
+ZFS nunca sobrescribe datos existentes. Cuando se modifica un bloque, se escribe en un \emph{nuevo} espacio del
+disco; luego los punteros de metadatos son actualizados. Este mecanismo garantiza que \textbf{el sistema de archivos nunca queda en un estado inconsistente}, eliminando la necesidad de herramientas como \texttt{fsck}.
+
+\subsubsection{Instantáneas (\emph{Snapshots}) y clones}
+Como ZFS no sobrescribe datos, crear una instantánea simplemente consiste en \emph{no liberar} los bloques que
+pertenecían a la versión anterior. Las instantáneas son de solo lectura, casi instantáneas en tiempo y de costo
+casi nulo en espacio inicial. A partir de una instantánea se puede crear un \emph{clone}, que es una copia
+escribible que comparte bloques con el origen hasta que divergen.
+
+\subsubsection{Autorreparación (\emph{Self-healing})}
+En pools con redundancia (mirror o RAID-Z), cada lectura verifica el \emph{checksum} del bloque. Si se detecta
+corrupción, ZFS obtiene los datos correctos desde la copia redundante y repara el bloque dañado automáticamente.
+El comando \texttt{zpool scrub} permite un escaneo proactivo de todo el pool.
+
+\subsubsection{Caché adaptativo (ARC)}
+El \emph{Adaptive Replacement Cache} (ARC) es el algoritmo de caché en RAM de ZFS. Combina los datos usados más
+recientemente (LRU) con los usados con mayor frecuencia (LFU), adaptándose en tiempo real a la carga de trabajo,
+lo que lo hace notablemente más eficiente que el caché de página estándar del kernel.
+
+\subsubsection{Compresión y deduplicación}
+ZFS soporta compresión transparente por dataset (algoritmos LZ4, GZIP, ZSTD). También ofrece deduplicación en
+línea (\emph{inline deduplication}), aunque esta característica tiene un alto costo en RAM y se recomienda solo
+en entornos con datos muy redundantes y suficiente memoria.
+
+\subsection{Capacidades y límites teóricos}
+ZFS es un sistema de archivos de \textbf{128 bits}, lo que le confiere límites prácticamente imposibles de
+alcanzar en la práctica:
+
+\begin{center}
+  \begin{tabular}{ll}
+    \hline
+    \textbf{Parámetro} & \textbf{Límite} \\
+    \hline
+    Tamaño máximo de archivo & 16 Exabytes \\
+    Tamaño máximo de sistema de archivos & 16 Exabytes \\
+    Tamaño máximo de \emph{zpool} & $\approx 2^{78}$ bytes ($\approx 256$ Zebibytes) \\
+    Número máximo de snapshots & $2^{48}$ \\
+    Número máximo de archivos por sistema de archivos & $2^{48}$ \\
+    Número máximo de sistemas de archivos por \emph{zpool} & $2^{64}$ \\
+    \hline
+  \end{tabular}
+\end{center}
+
+Jeff Bonwick, arquitecto jefe de ZFS, describió la magnitud de estas cifras señalando que llenar un sistema de archivos de 128 bits excedería los límites físicos cuánticos de almacenamiento del planeta.
+
+\subsection{Ventajas}
+\begin{itemize}
+\item Integridad de datos garantizada de extremo a extremo (checksums en árbol).
+\item Autorreparación transparente sin intervención del administrador.
+\item Administración unificada de volúmenes y sistema de archivos.
+\item Instantáneas y clones casi instantáneos y eficientes en espacio.
+\item Compresión transparente con mejora efectiva del rendimiento de I/O.
+\item Alta escalabilidad: capacidad prácticamente ilimitada.
+\item RAID-Z sin el defecto del \emph{write hole}.
+\end{itemize}
+
+\subsection{Inconvenientes}
+\begin{itemize}
+\item Alto consumo de RAM (se recomienda mínimo 8 GB; la deduplicación puede requerir decenas de GB).
+\item Licencia CDDL incompatible con GPL: no se puede incluir en el kernel Linux oficialmente.
+\item La naturaleza CoW puede provocar fragmentación elevada a largo plazo.
+\item No dispone de herramienta de desfragmentación; la solución es migrar los datos a otro \emph{pool}.
+\item Curva de aprendizaje pronunciada para administradores no familiarizados.
+\end{itemize}
+
+\newpage
+
+\section{Btrfs (B-Tree File System)}
+
+\subsection{Orígenes e historia}
+La estructura de datos central de Btrfs los \emph{copy-on-write B-trees} fue propuesta originalmente por el
+investigador de IBM \textbf{Ohad Rodeh} en una presentación en la conferencia \textbf{USENIX de 2007}. Poco
+después, \textbf{Chris Mason}, entonces en Oracle, tomó esa idea como base e inició el desarrollo activo del
+sistema de archivos.\\
+
+Oracle anunció formalmente el proyecto en \textbf{2007} con el objetivo declarado de reemplazar a ext4 como
+sistema de archivos estándar de Linux. El soporte experimental fue incluido en el \textbf{kernel Linux 2.6.29}
+en \textbf{enero de 2009}, y la versión 0.19 fue publicada como software libre bajo \textbf{licencia GPL} en
+junio del mismo año.
+
+A diferencia de ZFS, Btrfs fue diseñado \emph{desde el principio} para integrarse en el kernel Linux,
+aprovechando sus abstracciones de dispositivos de bloque y su subsistema de memoria virtual.
+
+\begin{mdframed}[backgroundcolor=verdefondo, linecolor=verde, linewidth=1pt, roundcorner=4pt]
+  \textbf{Nota de estabilidad:} Btrfs se considera estable en sus funciones principales desde aproximadamente
+  2014. Sin embargo, algunas características avanzadas (como RAID 5/6 y la deduplicación en línea) aún se
+  consideran experimentales o con advertencias en ciertas distribuciones. El formato de disco no ha cambiado de
+  forma incompatible desde su estabilización. Synology lo adoptó para sus dispositivos NAS con DSM 6.
+\end{mdframed}
+
+\subsection{Propósito y problema que resolvía}
+Ext4, el sistema de archivos dominante en Linux, fue diseñado como una evolución incremental de ext3 y arrastraba
+limitaciones estructurales importantes:
+
+\begin{itemize}
+\item Número máximo de inodos fijado en el momento del formateo (sin posibilidad de expansión dinámica).
+\item Sin soporte nativo para instantáneas ni subvolúmenes.
+\item Sin checksums de datos (solo de metadatos en algunas implementaciones).
+\item Límite de tamaño de archivo y volumen de 16 TB en configuraciones típicas.
+\item Sin compresión transparente integrada.
+\end{itemize}
+
+Btrfs fue diseñado para superar todas estas limitaciones, centrándose especialmente en la
+\textbf{tolerancia a fallos}, la \textbf{facilidad de administración} y la \textbf{eficiencia del espacio}.
+
+\subsection{Innovación principal}
+La innovación central de Btrfs es su \textbf{modelo uniforme de árboles B con copy-on-write}. Absolutamente todo
+dentro del sistema de archivos (metadatos, datos, directorios, listas de extensiones) se modela como nodos u
+hojas dentro de un bosque de árboles B. Este diseño proporciona:
+
+\begin{itemize}
+\item Búsquedas logarítmicas $O(\log n)$ incluso con millones de archivos en un directorio.
+\item Capacidad de crear subvolúmenes y snapshots de forma casi instantánea.
+\item Base estructural para el modelo CoW sin necesidad de capas adicionales.
+\end{itemize}
+
+Theodore Ts'o, desarrollador de ext3 y ext4, reconoció que Btrfs incorpora ideas de diseño de Reiser4 y
+funcionalidades conceptualmente cercanas a las de ZFS, pero implementadas de forma nativa en Linux.
+
+\subsection{Código abierto y propiedad}
+\begin{itemize}
+\item \textbf{Creador original:} Oracle Corporation (basado en trabajo de IBM Research).
+\item \textbf{Mantenimiento actual:} Comunidad de kernel Linux y múltiples empresas (Meta, SUSE, Synology).
+\item \textbf{Licencia:} \textbf{GPL v2} (totalmente compatible con el kernel Linux).
+\item \textbf{Estado:} Software libre de código abierto nativo del kernel Linux.
+\end{itemize}
+
+\subsection{Sistemas operativos donde es más usado}
+Btrfs es exclusivo de \textbf{Linux}. Es el sistema de archivos por defecto en:
+\begin{itemize}
+\item \textbf{Fedora} (predeterminado desde Fedora 33).
+\item \textbf{openSUSE / SUSE Linux Enterprise} (predeterminado con snapper para rollbacks del sistema).
+\item \textbf{Synology DSM} (en modelos NAS compatibles, como alternativa a ext4).
+\item Adoptado también en dispositivos embebidos con Linux y algunas distribuciones orientadas a escritorio.
+\end{itemize}
+
+\subsection{Uso típico}
+\begin{itemize}
+\item Estaciones de trabajo Linux con rollbacks de sistema operativo.
+\item Servidores ligeros y medianos con necesidad de snapshots.
+\item Dispositivos NAS comerciales (Synology) para protección de datos empresariales.
+\item Entornos de desarrollo donde se requiere versionado rápido de entornos.
+\item Sistemas con almacenamiento SSD donde el soporte nativo de TRIM y el modo optimizado resultan ventajosos.
+\end{itemize}
+
+\subsection{Arquitectura e implementación}
+
+\subsubsection{Todo es un árbol B}
+En Btrfs, los inodos, los metadatos de directorios y las extensiones de archivos (\emph{extents}) son nodos u
+hojas dentro de múltiples árboles B independientes. Cada árbol tiene su propia raíz, y los árboles se
+interconectan mediante referencias entre árboles. Esta arquitectura permite búsquedas eficientes y facilita la
+creación de instantáneas duplicando únicamente la raíz del árbol correspondiente.
+
+\subsubsection{Copy-on-Write (CoW)}
+Al igual que ZFS, Btrfs nunca sobrescribe datos en uso. Cuando se modifica un archivo, Btrfs escribe el nuevo
+contenido en bloques nuevos y actualiza los punteros del árbol B. Los bloques antiguos se liberan únicamente
+cuando ya no son referenciados por ninguna instantánea. Este mecanismo es la base de las instantáneas eficientes
+y de la consistencia transaccional.
+
+\subsubsection{Subvolúmenes}
+Los subvolúmenes son el rasgo más distintivo de Btrfs para el usuario de escritorio y servidor. Un subvolumen
+actúa como un directorio normal pero puede ser:
+
+\begin{itemize}
+\item Montado de forma independiente con su propio punto de montaje.
+\item Sujeto a cuotas independientes.
+\item Objeto de instantáneas individuales sin afectar al resto del sistema de archivos.
+\end{itemize}
+
+Una instalación típica de openSUSE o Fedora crea subvolúmenes separados para
+\texttt{/}, \texttt{/home}, \texttt{/var/log}, etc., todos compartiendo el mismo espacio de disco físico.
+
+\subsubsection{Instantáneas (\emph{Snapshots})}
+Crear una instantánea en Btrfs consiste en duplicar la raíz del árbol B del subvolumen. No se copian datos; solo
+se duplican los punteros. El espacio adicional se consume únicamente cuando los datos del subvolumen original
+divergen de la instantánea. Las instantáneas pueden ser:
+
+\begin{itemize}
+\item \textbf{De solo lectura:} para respaldo o referencia.
+\item \textbf{Escribibles (\emph{writable snapshots}):} lo que permite tener instantáneas de instantáneas, útiles
+  para entornos de prueba.
+\end{itemize}
+
+Synology implementa esta característica permitiendo hasta \textbf{256 puntos de recuperación} por hora, día o
+semana, con recuperación de autoservicio desde el Explorador de archivos de Windows o File Station.
+
+\subsubsection{Integridad de datos y metadatos duplicados}
+Btrfs genera \emph{checksums} para todos los datos y metadatos. Por defecto, almacena
+\textbf{dos copias de los metadatos} en el volumen para mayor resiliencia. Durante cada lectura, se verifican
+los checksums; si se detecta una discrepancia (\emph{silent data corruption}), el sistema puede recuperar los
+datos correctos desde las copias redundantes de metadatos o desde la configuración RAID configurada (RAID 1,
+RAID 5, RAID 6, RAID 10).
+
+\subsubsection{Soporte multi-dispositivo y RAID nativo}
+Btrfs gestiona múltiples dispositivos de forma nativa, sin necesidad de \texttt{mdadm} ni LVM, soporta:
+\begin{itemize}
+\item RAID 0 (\emph{striping}).
+\item RAID 1 (\emph{mirroring}).
+\item RAID 10.
+\item RAID 5 y RAID 6 (considerados experimentales; se desaconseja en producción crítica).
+\end{itemize}
+
+\subsubsection{Compresión transparente}
+Btrfs comprime los bloques de datos al vuelo antes de escribirlos en disco. Los algoritmos disponibles son:
+
+\begin{itemize}
+\item \textbf{zlib:} mayor ratio de compresión, mayor uso de CPU.
+\item \textbf{lzo:} compresión rápida, menor ratio.
+\item \textbf{zstd:} equilibrio óptimo entre velocidad y ratio de compresión (recomendado actualmente).
+\end{itemize}
+
+\subsubsection{Desfragmentación en línea y modo SSD}
+A diferencia de ZFS, Btrfs incorpora una herramienta de \textbf{desfragmentación sin necesidad de desmontar} el
+sistema de archivos (\texttt{btrfs filesystem defragment}). También dispone de un modo optimizado para SSD
+(opción de montaje \texttt{ssd}) que adapta la estrategia de asignación de bloques para reducir la amplificación
+de escritura.
+
+\subsubsection{Asignación dinámica de inodos}
+A diferencia de ext4, Btrfs \textbf{no fija un número máximo de inodos} en el momento del formateo. Los inodos se
+asignan dinámicamente según la demanda, lo que elimina el error ``no space left on device'' causado por
+agotamiento de inodos (un problema conocido de ext4 en sistemas con millones de archivos pequeños).
+
+\subsection{Capacidades y límites}
+\begin{center}
+  \begin{tabular}{ll}
+    \hline
+    \textbf{Parámetro} & \textbf{Límite} \\
+    \hline
+    Tamaño máximo de archivo & 16 Exabytes \\
+    Tamaño máximo de volumen & 16 Exabytes \\
+    Número de instantáneas por subvolumen & Hasta 65.536 \\
+    Número de subvolúmenes por sistema de archivos & $2^{64}$ (teórico) \\
+    Tamaño máximo de nombre de archivo & 255 bytes \\
+    \bottomrule
+  \end{tabular}
+\end{center}
+
+\subsection{Ventajas}
+\begin{itemize}
+\item Licencia GPL: totalmente integrado en el kernel Linux sin módulos externos.
+\item Subvolúmenes y snapshots nativos, fundamentales para rollbacks del sistema operativo.
+\item Asignación dinámica de inodos: sin límite prefijado de número de archivos.
+\item Desfragmentación en línea sin desmontar.
+\item Modo optimizado para SSD.
+\item Compresión transparente (incluyendo zstd) con configuración por directorio.
+\item Adopción activa en distribuciones Linux modernas (Fedora, openSUSE, Synology DSM).
+\end{itemize}
+
+\subsection{Inconvenientes}
+\begin{itemize}
+\item RAID 5 y RAID 6 con problemas conocidos (\emph{write hole}); no recomendados para producción crítica.
+\item Menor madurez en entornos empresariales de muy alta carga comparado con ZFS o ext4.
+\item El rendimiento puede degradarse con alta fragmentación en HDDs mecánicos.
+\item La deduplicación en línea no está disponible nativamente; requiere herramientas externas (\texttt{duperemove}, \texttt{bees}).
+\item Algunas herramientas de monitoreo y respaldo del ecosistema Linux todavía no aprovechan completamente las capacidades de Btrfs.
+\end{itemize}
+
+\newpage
+
+\section{Comparativa entre ZFS y Btrfs}
+\subsection{Tabla de comparativa general}
+\begin{center}
+  \renewcommand{\arraystretch}{1.4}
+  \begin{tabular}{>{\bfseries}p{4.5cm} p{5.3cm} p{5.3cm}}
+    \hline
+    \textbf{Característica} & \textbf{ZFS} & \textbf{Btrfs} \\
+    \hline
+    Año de inicio & 2001 (lanzado en 2005) & 2007 (kernel en 2009) \\
+    Creador & Sun Microsystems & Oracle (IBM Research) \\
+    Mantenimiento actual & OpenZFS (comunidad) & Kernel Linux \\
+    Licencia & CDDL (código abierto) & GPL v2 \\
+    Integración en kernel Linux & Módulo externo (\texttt{dkms}) & Nativa \\
+    SO donde es más usado & FreeBSD, TrueNAS, Ubuntu & Linux (Fedora, openSUSE) \\
+    Uso típico & Servidores empresariales, NAS de alta gama, centros de datos & Escritorios Linux, servidores
+    medios, etc. \\
+    Tamaño máx. de archivo & 16 Exabytes & 16 Exabytes \\
+    Tamaño máx. de volumen & $\approx 256$ Zebibytes & 16 Exabytes \\
+    Gestión de volúmenes & Integrada (zpool) & Integrada (multi-dispositivo) \\
+    RAID nativo & Sí (RAID-Z1/Z2/Z3 + mirror) & Sí (RAID 0/1/10; RAID 5/6 experimental) \\
+    Checksums de datos & Sí (256 bits, en árbol) & Sí (CRC32C por defecto) \\
+    Autorreparación & Sí (con redundancia) & Sí (con RAID configurado) \\
+    Copy-on-Write & Sí & Sí \\
+    Snapshots & Sí (datasets y zvols) & Sí (subvolúmenes) \\
+    Subvolúmenes & Datasets (similar) & Sí (nativo) \\
+    Compresión transparente & Sí (LZ4, GZIP, ZSTD) & Sí (zlib, lzo, ZSTD) \\
+    Deduplicación & Sí (inline, costosa en RAM) & Solo offline \\
+    Desfragmentación & No (requiere migración de datos) & Sí (en línea, sin desmontar) \\
+    Modo SSD & L2ARC, opciones de caché & Opción de montaje \texttt{ssd} \\
+    Consumo de RAM & Alto (ARC, dedup) & Moderado \\
+    Madurez empresarial & Muy alta & Media-alta \\
+    \hline
+  \end{tabular}
+\end{center}
+
+\subsection{Integridad de datos}
+Ambos sistemas implementan \emph{checksums} para detectar la corrupción silenciosa, pero con diferencias de
+alcance:
+
+\begin{itemize}
+\item \textbf{ZFS} almacena el \emph{checksum} de cada bloque en el puntero del bloque padre, formando un árbol
+  de Merkle desde la hoja hasta la raíz del pool. Esto garantiza que cualquier modificación maliciosa o
+  accidental de datos o metadatos sea detectada.
+\item \textbf{Btrfs} también verifica datos y metadatos, y mantiene dos copias de los metadatos por defecto.
+  Sin embargo, la arquitectura del árbol B hace que la verificación sea parcialmente dependiente de la
+  configuración RAID para la recuperación efectiva.
+\end{itemize}
+
+En ambos casos, la autorreparación automática solo es posible cuando existe redundancia (mirror, RAID-Z, RAID 1,
+etc.).
+
+\subsection{Snapshots y gestión del espacio}
+
+\begin{itemize}
+\item Ambos sistemas crean instantáneas en tiempo casi nulo y con costo de espacio inicial prácticamente cero
+  gracias al CoW.
+\item \textbf{ZFS} distingue entre \emph{snapshots} (solo lectura) y \emph{clones} (escribibles derivados de un
+  snapshot).
+\item \textbf{Btrfs} permite \emph{snapshots} escribibles directamente, lo que simplifica el flujo de trabajo
+  para rollbacks y entornos de prueba.
+\item Synology aprovecha los snapshots de Btrfs para ofrecer hasta \textbf{256 puntos de recuperación} con mínimo
+  impacto en el rendimiento.
+\end{itemize}
+
+\subsection{Integración con Linux}
+
+Esta es la diferencia práctica más importante para usuarios de Linux:
+
+\begin{itemize}
+\item \textbf{Btrfs} está incluido directamente en el árbol del kernel Linux. No requiere módulos adicionales, y
+  su desarrollo está sincronizado con el ciclo de lanzamiento del kernel.
+\item \textbf{ZFS} debe instalarse como módulo externo (\texttt{zfs-dkms} o \texttt{zfs-linux}), lo que implica
+  pasos adicionales de compilación en cada actualización de kernel, posibles retrasos y limitaciones en
+  distribuciones con restricciones de licencia (como Debian en su configuración más estricta).
+\end{itemize}
+
+\subsection{RAID: ZFS vs Btrfs}
+
+\begin{itemize}
+\item \textbf{RAID-Z de ZFS} es considerado maduro y confiable para producción. No tiene el defecto del \emph{write hole} y soporta paridad simple (Z1), doble (Z2) y triple (Z3).
+\item \textbf{RAID 5/6 de Btrfs} tiene problemas conocidos con el \emph{write hole} y no es recomendado para producción crítica. RAID 1 y RAID 10 son estables.
+\item Para entornos que requieren RAID con paridad en Linux, ZFS (via \texttt{zfs on linux}) es la opción más robusta actualmente.
+\end{itemize}
+
+\subsection{Escalabilidad y consumo de recursos}
+
+\begin{itemize}
+\item \textbf{ZFS} escala mejor en entornos de muy alta capacidad (petabytes o más) y cargas de I/O intensas,
+  pero tiene un consumo de RAM significativamente mayor. El ARC puede consumir la mayor parte de la memoria
+  disponible para maximizar el rendimiento.
+\item \textbf{Btrfs} es más ligero en consumo de memoria y más adecuado para sistemas con recursos limitados
+  (NAS domésticos, laptops, servidores pequeños).
+\end{itemize}
+
+\subsection{Casos de uso recomendados}
+
+\begin{center}
+  \renewcommand{\arraystretch}{1.3}
+  \begin{tabular}{p{5.5cm} p{3.5cm} p{3.5cm}}
+    \hline
+    \textbf{Caso de uso} & \textbf{ZFS} & \textbf{Btrfs} \\
+    \hline
+    NAS empresarial de alta capacidad & \textbf{Recomendado} & Aceptable \\
+    Servidor de virtualización (Proxmox) & \textbf{Recomendado} & Posible \\
+    Escritorio Linux con rollbacks del SO & No óptimo & \textbf{Recomendado} \\
+    NAS doméstico / SOHO & Posible & \textbf{Recomendado} \\
+    Distribución Linux estándar & Módulo externo & \textbf{Nativo} \\
+    Entorno FreeBSD / TrueNAS & \textbf{Nativo} & No disponible \\
+    RAID con paridad en producción & \textbf{RAID-Z estable} & RAID 5/6 exp. \\
+    Deduplicación intensiva & Posible (RAM alta) & Ext. (offline) \\
+    \hline
+  \end{tabular}
+\end{center}
+
+\newpage
+
+\section{Fichas de referencia rápida}
+Las siguientes fichas condensan la información más relevante de cada sistema de archivos en formato de
+formulario, incluyendo las respuestas breves solicitadas.
+
+\bigskip
+
+\begin{fichabox}{ZFS - Ficha de referencia rápida}
+  \begin{tabular}{>{\bfseries}p{4.5cm} p{9cm}}
+    Año aproximado & 2001 (inicio) / 2005 (lanzamiento en OpenSolaris) \\[4pt]
+    Abierto / Propietario & Código abierto bajo licencia CDDL (OpenZFS) \\[4pt]
+    SO donde más se usa & FreeBSD, TrueNAS, illumos; con módulo externo en Linux (Ubuntu, Proxmox) \\[4pt]
+    Uso típico & Servidores empresariales, centros de datos, NAS de alta capacidad, entornos de virtualización críticos \\[4pt]
+    Implementación / Características clave & Sistema de archivos + gestor de volúmenes fusionados; storage pools (\texttt{zpool}); checksums en árbol de Merkle; CoW transaccional; RAID-Z (sin write hole); autorreparación; ARC; compresión y deduplicación transparentes; snapshots e zvols \\[4pt]
+    Tamaño máx.\ de archivo & 16 Exabytes \\[4pt]
+    Tamaño máx.\ de volumen & $\approx 256$ Zebibytes ($2^{78}$ bytes; prácticamente ilimitado) \\
+  \end{tabular}
+\end{fichabox}
+
+\bigskip
+
+\begin{fichabox}{Btrfs - Ficha de referencia rápida}
+  \begin{tabular}{>{\bfseries}p{4.5cm} p{9cm}}
+    Año aproximado & 2007 (anuncio) / 2009 (incorporación al kernel Linux 2.6.29) \\[4pt]
+    Abierto / Propietario & Código abierto bajo licencia GPL v2 (nativo del kernel Linux) \\[4pt]
+    SO donde más se usa & Linux exclusivamente (Fedora, openSUSE, Synology DSM) \\[4pt]
+    Uso típico & Estaciones de trabajo Linux con rollbacks de SO, NAS comerciales, servidores medianos, entornos
+    de desarrollo \\[4pt]
+    Implementación / Características clave & Árbol B con CoW como estructura unificada; subvolúmenes
+    independientes; snapshots escribibles; integridad de datos + metadatos duplicados; RAID nativo (RAID 1/10
+    estable; RAID 5/6 experimental); compresión transparente (zstd); desfragmentación en línea; asignación
+    dinámica de inodos; modo SSD \\[4pt]
+    Tamaño máx.\ de archivo & 16 Exabytes \\[4pt]
+    Tamaño máx.\ de volumen & 16 Exabytes \\
+  \end{tabular}
+\end{fichabox}
+
+\newpage
+
+\section{Conclusiones}
+
+ZFS y Btrfs representan dos filosofías distintas pero complementarias para abordar las limitaciones de los
+sistemas de archivos tradicionales.\\
+
+\textbf{ZFS} es la solución más madura, robusta y probada en entornos de almacenamiento de misión crítica. Su
+arquitectura de integridad de extremo a extremo, su RAID-Z libre del \emph{write hole} y su escalabilidad
+prácticamente ilimitada lo convierten en la elección preferida para centros de datos, arreglos NAS empresariales
+y sistemas donde la integridad de los datos es absolutamente prioritaria. Su principal limitación en el mundo
+Linux es la incompatibilidad de licencias, que obliga a utilizar módulos externos.\\
+
+\textbf{Btrfs} es la respuesta nativa del ecosistema Linux a la necesidad de un sistema de archivos moderno. Su
+integración directa en el kernel, sus subvolúmenes para rollbacks del sistema operativo, su ligereza en consumo
+de recursos y su adopción por distribuciones líderes (Fedora, openSUSE) y fabricantes NAS (Synology) lo
+posicionan como la opción más práctica para escritorios y servidores medianos bajo Linux. Su talón de Aquiles es
+la inmadurez de RAID 5/6 y la menor madurez general frente a ZFS en cargas empresariales extremas.\\
+
+En definitiva, la elección entre ambos depende del contexto:
+\textbf{ZFS para máxima integridad y escala empresarial};
+\textbf{Btrfs para máxima integración con Linux y flexibilidad en sistemas de tamaño medio}.
+\end{document}

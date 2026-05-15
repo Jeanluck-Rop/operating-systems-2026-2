@@ -1,0 +1,408 @@
+\documentclass[12pt,letterpaper]{article}
+
+\setlength{\parindent}{0pt}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{listings, float, geometry, enumitem}
+\usepackage{graphicx, xcolor, amsmath, fancyvrb}
+\usepackage[normalem]{ulem}
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc}
+
+\geometry{margin=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\renewcommand{\lstlistingname}{Código}
+
+%------ Definimos los colores para la sintaxis del código --------%
+\definecolor{backcolour}{rgb}{0.93, 0.93, 0.93} % Gris suave para el fondo
+\definecolor{codegreen}{rgb}{0, 0.6, 0}         % Comentarios
+\definecolor{codegray}{rgb}{0.5, 0.5, 0.5}      % Números de línea
+\definecolor{codepurple}{rgb}{0.58, 0, 0.82}    % Strings
+\definecolor{keywordcolor}{rgb}{0.5, 0.0, 0.5}
+\definecolor{codeorg}{HTML}{DB9400}      % Tipos de datos y Structs propios
+
+\definecolor{linkblue}{HTML}{1A167A}
+\definecolor{redcolor}{HTML}{7A1805}
+\definecolor{greencolor}{HTML}{0E8F10}
+\definecolor{greeblucolor}{HTML}{0E6657}
+\definecolor{orgcolor}{HTML}{B86D00}
+\definecolor{highlightyellow}{HTML}{FFF176}
+\definecolor{boxgray}{HTML}{F2F2F2}
+\definecolor{borderblue}{HTML}{1A167A}
+
+% --- Configuración del Estilo ---
+\lstdefinestyle{modernc}{
+    language=C,
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    emph={int,uint32_t,char,double,float,unsigned,void,bool,struct,size_t,
+          Room, Client, pthread_mutex_t, NULL},
+    emphstyle=\color{codeorg}\bfseries
+}
+
+% --- Estilo Assembly ---
+\lstdefinestyle{modernasm}{
+    language=Assembler,
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordcolor}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    numbers=left,
+    numbersep=5pt,
+    frame=single,
+    rulecolor=\color{black!20},
+    frameround=tttt,
+    morecomment=[l]{;},
+    morekeywords={
+        mov, add, sub, mul, div, inc, dec,
+        push, pop, call, ret,
+        cmp, jmp, je, jne, jg, jl, jge, jle,
+        and, or, xor, not,
+        lea, nop
+    },
+    emph={
+        eax, ebx, ecx, edx,
+        esi, edi, esp, ebp,
+        ax, bx, cx, dx,
+        rax, rbx, rcx, rdx,
+        rsi, rdi, rsp, rbp
+    },
+    emphstyle=\color{codeorg}\bfseries
+}
+
+% Estilos TikZ para el diagrama de flujo
+\tikzstyle{startstop} = [rectangle, rounded corners=8pt, minimum width=3.2cm,
+    minimum height=0.8cm, text centered, draw=borderblue, fill=borderblue!15,
+    font=\small\bfseries]
+\tikzstyle{process} = [rectangle, minimum width=3.8cm, minimum height=0.8cm,
+    text centered, text width=4.2cm, draw=black!60, fill=boxgray,
+    font=\small]
+\tikzstyle{decision} = [diamond, aspect=3.5, inner sep=2pt,
+    text centered, text width=2.8cm, draw=orgcolor, fill=orgcolor!15,
+    font=\small]
+\tikzstyle{arrow} = [thick, ->, >=Stealth]
+
+\begin{document}
+
+\input{cover}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Objetivo}
+% ================================================================
+
+El objetivo de este proyecto es implementar un \textbf{monitor de sistema} en lenguaje C enfocado en el
+monitoreo del procesador y la memoria. La herramienta debe exponer al menos dos métricas dinámicas que se
+actualicen en tiempo real, y puede presentarse como una aplicación de línea de comandos o con interfaz
+gráfica básica.\\
+
+Este reporte documenta el desarrollo incremental de dicha herramienta, organizado por \textbf{implementaciones},
+cada implementación representa una etapa funcional completa que puede extenderse a lo largo de más de una sesión
+de trabajo. El criterio que tomamos de avance no es el tiempo, sino la funcionalidad que se agrega en cada
+implementación.\\
+
+El plan de implementaciones es el siguiente:
+\begin{enumerate}[leftmargin=1.5cm]
+\item \textbf{Primer Implementación. Escaneo e impresión básica:} lectura de \texttt{/proc/meminfo} y
+  \texttt{/proc/[pid]/} para obtener métricas de memoria y lista de procesos, salida por \texttt{printf}. Se
+  establece también la infraestructura de compilación con CMake y el entorno reproducible con Docker.
+  
+\item \textbf{Segunda Implementación. Terminal interactiva con ncurses:} sustitución del \texttt{printf} por una
+  interfaz de terminal estilizada que se actualiza en tiempo real. Se introducen dos hilos POSIX, uno recolector
+  de datos y uno de dibujado, de modo que la interfaz nunca se congele independientemente de la carga del sistema.
+  
+\item \textbf{Tercer Implementación. Interfaz gráfica con GTK-4:} migración de la presentación a una ventana de escritorio con tablas, barras de progreso y gráficas de historial, manteniendo el mismo backend de recolección en C.
+  
+\item \textbf{Cuarta Implementación. Monitoreo de red (extensión futura):} incorporación de captura y análisis de
+  paquetes de red al estilo de \texttt{iftop}, mostrando emisor, receptor, protocolo y volumen de tráfico.
+\end{enumerate}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% ================================================================
+\section*{Primer Implementación: Escaneo e impresión básica}
+% ================================================================
+
+El objetivo de esta primera implementación fue establecer la base del proyecto, definir las estructuras de datos
+que representan el estado del sistema, leer las métricas de memoria y la lista de procesos activos desde el
+sistema operativo, e imprimirlos en la terminal con \texttt{printf}. No hay interfaz especial, no hay
+actualizaciones en tiempo real y no hay hilos. Se trata de un \textit{escaneo único}, el programa arranca, toma
+una fotografía del sistema y termina.\\
+La razón: antes de introducir complejidad concurrente (hilos, mutex) o de presentación (ncurses, GTK), es
+necesario verificar que los datos que se leen son correctos. Con un \texttt{printf} simple nos permitimos
+confirmar que las métricas tienen sentido antes de construir encima de ellas.
+
+% ----------------------------------------------------------------
+\subsection*{Arquitectura del código}
+% ----------------------------------------------------------------
+
+El proyecto se organiza en tres archivos fuente y un header:
+\begin{itemize}[leftmargin=1.5cm]
+\item \texttt{include/monitor.h}: definición de las estructuras de datos y declaración de las funciones públicas.
+\item \texttt{src/monitor.c}: implementación de la recolección de datos y la impresión.
+\item \texttt{src/main.c}: punto de entrada; orquesta las tres llamadas en secuencia.
+\end{itemize}
+
+\medskip
+
+El flujo completo del programa es lineal:
+\begin{center}
+\begin{tikzpicture}[node distance=0.7cm]
+  \node (start)  [startstop]                        {main()};
+  \node (mem)    [process, below=of start]          {collect\_memory()\\lee /proc/meminfo};
+  \node (proc)   [process, below=of mem]            {collect\_processes()\\itera /proc/[pid]/};
+  \node (print)  [process, below=of proc]           {print\_snapshot()\\printf a terminal};
+  \node (end)    [startstop, below=of print]        {return 0};
+  
+  \draw [arrow] (start) -- (mem);
+  \draw [arrow] (mem)   -- (proc);
+  \draw [arrow] (proc)  -- (print);
+  \draw [arrow] (print) -- (end);
+\end{tikzpicture}
+\end{center}
+
+% ----------------------------------------------------------------
+\subsection*{Estructuras de datos: \texttt{monitor.h}}
+% ----------------------------------------------------------------
+La primera decisión de diseño fue centralizar todos los datos del sistema en dos estructuras:
+\texttt{ProcessInfo} y \texttt{SystemSnapshot}.
+
+\medskip
+
+\texttt{ProcessInfo} representa un único proceso, sus campos mapean directamente con los archivos que el kernel
+expone en \texttt{/proc/[pid]/}:
+
+\begin{lstlisting}[style=modernc, caption={\texttt{monitor.h} --- struct ProcessInfo (líneas 12--21)}]
+% líneas 12-21 de monitor.h
+\end{lstlisting}
+
+Cada campo tiene una fuente específica dentro de \texttt{/proc}:
+
+\begin{itemize}
+\item \texttt{process\_id} viene del nombre del directorio en \texttt{/proc};
+\item \texttt{name} de \texttt{/proc/[pid]/comm}; \texttt{command\_line} de
+\item \texttt{/proc/[pid]/cmdline}; \texttt{state}, \texttt{parent\_process\_id},
+\item \texttt{memory\_kb} y \texttt{vm\_size\_kb} de \texttt{/proc/[pid]/status}.
+\end{itemize}
+
+\medskip
+
+\texttt{SystemSnapshot} agrupa las métricas globales de memoria y el arreglo de procesos en una sola estructura
+que se pasa por referencia entre funciones:
+
+\begin{lstlisting}[style=modernc, caption={\texttt{monitor.h} --- struct SystemSnapshot (líneas 23--34)}]
+% líneas 23-34 de monitor.h
+\end{lstlisting}
+
+\bigskip
+
+El arreglo \texttt{processes[MAX\_PROCS]} es estático con \texttt{MAX\_PROCS = 512}, de este modo evitamos
+asignación dinámica de memoria (\texttt{malloc}) en esta primera etapa, simplificando el código a costa de un
+límite fijo. En un sistema de escritorio típico el número de procesos rara vez supera los 400.
+
+% ----------------------------------------------------------------
+\subsection*{Restricción a Linux y portabilidad entre distribuciones}
+% ----------------------------------------------------------------
+La herramienta depende de \texttt{/proc}, un sistema de archivos virtual exclusivo del kernel Linux, lo que
+significa que no compila ni corre en macOS, Windows ni BSD sin modificaciones.
+
+\medskip
+
+Sin embargo, \texttt{/proc} está presente en todas las distribucionesbasadas en Linux (Fedora, Ubuntu, Debian, Arch, Alpine) porque es una interfaz del kernel, no del sistema de paquetes, el mismo código que lee \texttt{/proc/meminfo} en Fedora funciona sin cambios en Ubuntu o Debian. El estándar que define su estructura está
+documentado en \texttt{man 5 proc} y ha sido estable durante décadas.
+
+\medskip
+
+Para garantizar reproducibilidad entre máquinas con distintas distribuciones se introdujo un
+\texttt{Dockerfile}, descrito al final de este documento.
+
+% ----------------------------------------------------------------
+\subsection*{Lectura de memoria \texttt{collect\_memory()}}
+% ----------------------------------------------------------------
+La función \texttt{collect\_memory()} lee el archivo \texttt{/proc/meminfo}, que el kernel regenera en cada
+acceso con los valores actuales de memoria. Su formato es una lista de campos con el patrón \texttt{"Campo: valor kB"}:
+
+\begin{lstlisting}[style=modernc, caption={\texttt{monitor.c} --- collect\_memory() (líneas 18--47)}]
+% líneas 18-47 de monitor.c
+\end{lstlisting}
+
+\bigskip
+
+El archivo \texttt{/proc/meminfo} tiene un formato fijo garantizado por el kernel, la cadena \texttt{"MemTotal: \%ld kB"} es el patrón literal que aparece en el archivo, incluyendo los espacios y la unidad \texttt{kB}.
+\texttt{sscanf} devuelve el número de campos que pudo leer exitosamente; al verificar \texttt{== 1} nos aseguramos de que el match fue completo antes de guardar el valor, si la línea no coincide con el patrón, \texttt{sscanf} devuelve 0 y simplemente pasamos a la siguiente. Se cumple de manera análoga para los demás casos.
+
+\medskip
+
+Linux usa la RAM libre para cachear contenido de archivos (\texttt{Cached}) y metadatos de filesystem
+(\texttt{Buffers}), esta memoria aparece como ``usada'' pero el kernel la libera inmediatamente cuando una
+aplicación la necesita. La fórmula correcta es:
+\[
+\texttt{used} = \texttt{total} - \texttt{free} - \texttt{buffers} - \texttt{cached}
+\]
+Esta es la misma fórmula que usan \texttt{htop} y \texttt{free -h}. Es por esta razón de qué \texttt{memory\_used} no es simplemente \texttt{total - free}.
+
+% ----------------------------------------------------------------
+\subsection*{Lectura de procesos \texttt{collect\_processes()}}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{monitor.c} --- collect\_processes() (líneas 49--122)}]
+% líneas 49-122 de monitor.c
+\end{lstlisting}
+
+\bigskip
+
+En Linux cada proceso vivo tiene un directorio en \texttt{/proc} cuyo nombre es su PID, por ejemplo \texttt{/proc/1234/}. No existe una llamada de sistema que devuelva directamente la lista de PIDs activos; la forma estándar
+(la misma que usa \texttt{ps} y \texttt{top}) es iterar \texttt{/proc} y filtrar las entradas cuyo nombre sea
+numérico con \texttt{isdigit()}.
+
+\medskip
+
+A diferencia de los demás archivos de \texttt{/proc}, \texttt{cmdline} no usa saltos de línea como separador
+entre argumentos usa el carácter nulo \texttt{'\textbackslash0'}. Si usáramos \texttt{fgets}, la lectura se
+detendría en el primer \texttt{'\textbackslash0'} y perderíamos todos los argumentos, \texttt{fread} lee los
+bytes crudos y luego reemplazamos los \texttt{'\textbackslash0'} internos por espacios para poder imprimirlos.
+
+\medskip
+
+Los hilos internos del kernel (\texttt{kworker}, \texttt{migration}, \texttt{rcu\_sched}) aparecen como entradas
+en \texttt{/proc} pero no tienen espacio de memoria de usuario asignado. Su \texttt{VmRSS} es 0, incluirlos no
+aporta información útil para un monitor de memoria y solo ocupan entradas del arreglo.
+
+\medskip
+
+\texttt{VmRSS} (Resident Set Size) son las páginas del proceso que están físicamente en RAM en este momento.
+\texttt{VmSize} es todo el espacio de direcciones virtuales reservado, que puede incluir regiones que el kernel
+nunca ha cargado a RAM o que ya fueron movidas a swap. Para saber quién está \textit{realmente} usando memoria,
+RSS es la métrica correcta.
+
+% ----------------------------------------------------------------
+\subsection*{Impresión y ordenamiento \texttt{print\_snapshot()}}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{monitor.c} --- print\_snapshot() (líneas 124--180)}]
+% líneas 124-180 de monitor.c
+\end{lstlisting}
+
+\bigskip
+
+Antes de imprimir, la función copia el arreglo de procesos con \texttt{memcpy} y lo ordena con \texttt{qsort}
+usando \texttt{cmp\_mem} como comparador, se ordena una \textit{copia} para no alterar el orden original del
+snapshot, lo cual será importante cuando en implementaciones futuras otros hilos lean esos datos concurrentemente.
+
+\medskip
+
+El comparador \texttt{cmp\_mem} usa el idioma \texttt{(b > a) - (b < a)} en lugar de una resta directa
+\texttt{b - a}. La razón es que \texttt{memory\_kb} es de tipo \texttt{long} y la resta podría producir
+\textit{overflow} si los valores son muy grandes, corrompiendo el ordenamiento silenciosamente.
+
+% ----------------------------------------------------------------
+\subsection*{Punto de entrada: \texttt{main.c}}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{main.c} --- completo (líneas 1--17)}]
+% líneas 1-17 de main.c
+\end{lstlisting}
+
+\texttt{main()} inicializa el snapshot con \texttt{memset} a cero antes de cualquier lectura, sin esto, los
+campos del struct contendrían basura de la pila y los cálculos de memoria producirían valores incorrectos.
+La secuencia es estrictamente lineal: recolectar memoria, recolectar procesos, imprimir.
+
+% ----------------------------------------------------------------
+\subsection*{Infraestructura de compilación: CMake}
+% ----------------------------------------------------------------
+
+El proyecto usa CMake con dos archivos \texttt{CMakeLists.txt}, uno raíz que define el proyecto y estándar de C,
+y uno dentro de \texttt{src/} que lista los archivos fuente y enlaza las bibliotecas. Esta separación nos
+permitirá agregar nuevos módulos en futuras implementaciones modificando solo el \texttt{CMakeLists.txt} de \texttt{src/}.
+
+\medskip
+
+La compilación completa (sin uso de contenedores) se realiza con:
+
+\begin{Verbatim}[frame=single, rulecolor=\color{black!20}, fontsize=\small]
+cmake -B build && cmake --build build && ./build/src/sysmon
+\end{Verbatim}
+
+% ----------------------------------------------------------------
+\subsection*{Entorno reproducible: Dockerfile}
+% ----------------------------------------------------------------
+
+Un reto práctico de cualquier proyecto en C es la gestión de dependencias del sistema, en esta implementación
+las dependencias son mínimas (solo GCC y CMake), pero en implementaciones futuras se agregarán \textbf{ncurses}
+para la terminal interactiva y \textbf{GTK-4 con libadwaita} para la interfaz gráfica. Instalar estas bibliotecas
+varía entre distribuciones, el paquete se llama \texttt{libgtk-4-dev} en Debian/Ubuntu pero \texttt{gtk4-devel}
+en Fedora por ejemplo.
+
+\medskip
+
+Para eliminar esta fricción se introdujo un \texttt{Dockerfile} basado en \texttt{debian:bookworm-slim}, se
+eligió Debian porque es la base más neutral y ampliamente compatible, y sobre Fedora porque los paquetes de GTK-4
+están igualmente actualizados en los repositorios de Debian. La imagen instala desde ahora las bibliotecas que
+se usarán en implementaciones futuras (\texttt{libncurses-dev}, \texttt{libgtk-4-dev}, \texttt{libadwaita-1-dev})
+, aunque en esta etapa el binario no las enlaza. Esto documenta las dependencias del proyecto completo y evita
+modificar el Dockerfile en cada implementación.
+
+\begin{lstlisting}[style=moddocker, caption={Dockerfile}]
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    cmake \
+    libncurses-dev \
+    libgtk-4-dev \
+    libadwaita-1-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN cmake -B build && cmake --build build
+
+CMD ["./build/src/sysmon"]
+\end{lstlisting}
+
+\medskip
+
+Para ejecutar con acceso a los procesos reales del sistema huésped:
+
+\begin{Verbatim}[frame=single, rulecolor=\color{black!20}, fontsize=\small]
+docker build -t sysmon .
+docker run --rm --pid=host sysmon
+\end{Verbatim}
+
+La opción \texttt{--pid=host} comparte el espacio de nombres de procesos del sistema huésped con el contenedor.
+Sin ella, el contenedor tiene su propio \texttt{/proc} aislado y solo vería sus propios procesos internos.
+
+\end{document}

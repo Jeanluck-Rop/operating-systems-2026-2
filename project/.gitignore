@@ -1,0 +1,10 @@
+*~
+reporte/*~
+reporte/*aux
+reporte/*log
+reporte/*out
+
+system-monitor/*~
+system-monitor/include/*~
+system-monitor/src/*~
+system-monitor/build/

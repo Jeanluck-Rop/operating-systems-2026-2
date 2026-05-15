@@ -12,7 +12,6 @@
 //Numero maximo de procesos que el snapshot puede almacenar
 #define MAX_PROCS 512
 
-
 /* Representa un unico proceso del sistema operativo,
    cada campo viene de una fuente distinta dentro de /proc/[pid]/ */
 typedef struct

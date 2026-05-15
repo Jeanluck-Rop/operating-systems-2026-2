@@ -20,7 +20,6 @@ Al ejecutarse, el programa hace tres cosas en orden:
    de procesos ordenada de mayor a menor consumo, terminando con el proceso que más y
    el que menos memoria usa.
 
----
 
 ## ¿Cómo funciona?
 
@@ -39,7 +38,6 @@ privilegios especiales.
 métrica más útil para saber quién está consumiendo memoria real, a diferencia del tamaño virtual que incluye
 memoria reservada pero no necesariamente cargada.
 
----
 
 ## Requisitos
 
@@ -48,7 +46,6 @@ memoria reservada pero no necesariamente cargada.
 - CMake 3.10 o superior
 - Docker (opcional, para correrlo sin instalar nada)
 
----
 
 ## Compilar y ejecutar localmente
 
@@ -62,7 +59,6 @@ cd system-monitor
 cmake -B build && cmake --build build && ./build/src/sysmon
 ```
 
----
 
 ## Ejecutar con Docker
 

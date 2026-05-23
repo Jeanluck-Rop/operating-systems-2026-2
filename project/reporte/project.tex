@@ -60,39 +60,6 @@
     emphstyle=\color{codeorg}\bfseries
 }
 
-% --- Estilo Assembly ---
-\lstdefinestyle{modernasm}{
-    language=Assembler,
-    backgroundcolor=\color{backcolour},
-    commentstyle=\color{codegreen},
-    keywordstyle=\color{keywordcolor}\bfseries,
-    numberstyle=\tiny\color{codegray},
-    stringstyle=\color{codepurple},
-    basicstyle=\ttfamily\footnotesize,
-    breaklines=true,
-    captionpos=b,
-    numbers=left,
-    numbersep=5pt,
-    frame=single,
-    rulecolor=\color{black!20},
-    frameround=tttt,
-    morecomment=[l]{;},
-    morekeywords={
-        mov, add, sub, mul, div, inc, dec,
-        push, pop, call, ret,
-        cmp, jmp, je, jne, jg, jl, jge, jle,
-        and, or, xor, not,
-        lea, nop
-    },
-    emph={
-        eax, ebx, ecx, edx,
-        esi, edi, esp, ebp,
-        ax, bx, cx, dx,
-        rax, rbx, rcx, rdx,
-        rsi, rdi, rsp, rbp
-    },
-    emphstyle=\color{codeorg}\bfseries
-}
 
 \lstdefinestyle{moddocker}{
     language=bash,
@@ -152,14 +119,12 @@ El plan de implementaciones es el siguiente:
   \texttt{/proc/[pid]/} para obtener métricas de memoria y lista de procesos, salida por \texttt{printf}. Se
   establece también la infraestructura de compilación con CMake y el entorno reproducible con Docker.
   
-\item \textbf{Segunda Implementación. Terminal interactiva con ncurses:} sustitución del \texttt{printf} por una
+\item \textbf{Segunda Implementación. Monitoreo de red (extensión futura):} incorporación de captura y análisis
+  de paquetes de red al estilo de \texttt{iftop}, mostrando emisor, receptor, protocolo y volumen de tráfico.
+  
+\item \textbf{Tercer Implementación. Terminal interactiva con ncurses:} sustitución del \texttt{printf} por una
   interfaz de terminal estilizada que se actualiza en tiempo real. Se introducen dos hilos POSIX, uno recolector
   de datos y uno de dibujado, de modo que la interfaz nunca se congele independientemente de la carga del sistema.
-  
-\item \textbf{Tercer Implementación. Interfaz gráfica con GTK-4:} migración de la presentación a una ventana de escritorio con tablas, barras de progreso y gráficas de historial, manteniendo el mismo backend de recolección en C.
-  
-\item \textbf{Cuarta Implementación. Monitoreo de red (extensión futura):} incorporación de captura y análisis de
-  paquetes de red al estilo de \texttt{iftop}, mostrando emisor, receptor, protocolo y volumen de tráfico.
 \end{enumerate}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -672,4 +637,838 @@ docker run --rm --pid=host sysmon
 La opción \texttt{--pid=host} comparte el espacio de nombres de procesos del sistema huésped con el contenedor.
 Sin ella, el contenedor tiene su propio \texttt{/proc} aislado y solo vería sus propios procesos internos.
 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Segunda Implementación: Monitor de red}
+% ================================================================
+
+\subsection*{Descripción general}
+
+Esta implementación agrega un segundo modo de operación al programa, el monitoreo de la red. Al ejecutar
+\texttt{./sysmon -{}-net}, el programa toma una fotografía del estado de la red y la imprime por terminal,
+de la misma forma que la primera implementación hacía con la memoria. No hay interfaz especial ni actualizaciones
+en tiempo real; el objetivo es, de nuevo, verificar que los datos leídos son correctos antes de integrarlos en
+la interfaz ncurses.
+
+\medskip
+
+Se añaden dos archivos nuevos al proyecto: \texttt{include/net\_monitor.h} y
+\texttt{src/net\_monitor.c}. El archivo \texttt{src/main.c} recibe una bandera
+\texttt{-{}-net} que decide qué modo ejecutar.
+
+\medskip
+
+El flujo completo en modo red es el siguiente:
+
+\begin{center}
+  \begin{tikzpicture}[node distance=0.7cm]
+    \node (start)   [startstop]                         {main() -{}-net};
+    \node (ifaces)  [process,  below=of start]          {collect\_net\_ifaces()\\lee /proc/net/dev};
+    \node (conns)   [process,  below=of ifaces]         {collect\_net\_conns()\\lee /proc/net/tcp+udp\\cruza inodos con PIDs};
+    \node (dec)     [decision, below=of conns]          {¿es root?};
+    \node (conn)    [process,  below=of dec]            {collect\_conntrack()\\lee nf\_conntrack};
+    \node (print)   [process,  below=of conn]           {print\_net\_snapshot()\\printf a terminal};
+    \node (end)     [startstop,below=of print]          {return 0};
+    
+    \draw [arrow] (start)  -- (ifaces);
+    \draw [arrow] (ifaces) -- (conns);
+    \draw [arrow] (conns)  -- (dec);
+    \draw [arrow] (dec)    -- node[right,font=\small]{sí} (conn);
+    \draw [arrow] (conn)   -- (print);
+    \draw [arrow] (dec.east) -- ++(2.2,0) |- node[right,font=\small]{no} (print);
+    \draw [arrow] (print)  -- (end);
+  \end{tikzpicture}
+\end{center}
+
+% ----------------------------------------------------------------
+\subsection*{Cómo funciona la red en Linux}
+% ----------------------------------------------------------------
+
+Antes de esta implementación, no tenía experiencia leyendo información de red desde el sistema operativo en C.
+En la implementación anterior, la fuente de datos simplemente: \texttt{/proc/meminfo} y los directorios de PID.
+Para la red, el primer desafío que se tuvo fue descubrir qué archivos leer y qué significan.
+
+\medskip
+
+Linux expone el estado de la red a través de \texttt{/proc/net/}, un subdirectorio del mismo sistema de archivos
+virtual que ya conocíamos. Los archivos relevantes son:
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \texttt{/proc/net/dev}: estadísticas acumuladas de bytes y paquetes por interfaz de red desde el arranque
+  del sistema.
+\item \texttt{/proc/net/tcp}: tabla de todas las conexiones TCP activas del sistema, con IPs y puertos en formato
+  hexadecimal.
+\item \texttt{/proc/net/udp}: ídem para UDP.
+\item \texttt{/proc/net/nf\_conntrack}: tabla del módulo netfilter con bytes y paquetes por conexión individual.
+  Solo accesible con privilegios de root y requiere que el módulo tenga la contabilidad habilitada.
+\end{itemize}
+
+\medskip
+
+Lo que sí podemos leer \textbf{sin root}: \texttt{/proc/net/dev}, \texttt{/proc/net/tcp} y
+\texttt{/proc/net/udp}. Con ellos obtenemos interfaces, bytes totales por interfaz y la lista de conexiones
+activas con sus IPs. Lo que \textbf{requiere root}: \texttt{/proc/net/nf\_conntrack} para ver cuántos bytes
+ha transferido cada conexión individual.
+
+% ----------------------------------------------------------------
+\subsection*{Estructuras de datos: \texttt{net\_monitor.h}}
+% ----------------------------------------------------------------
+
+Se definen tres estructuras que representan la red en un instante.
+
+\subsubsection*{IfaceStats una interfaz de red}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.h}, struct IfaceStats}]
+/* IfaceStats:
+   estadisticas de una interfaz de red /proc/net/dev */
+typedef struct {
+  char name[32];   //nombre de la interfaz: eth0, wlan0, lo...
+  long rx_bytes;   //bytes recibidos desde que arranco el SO
+  long tx_bytes;   //bytes transmitidos desde que arranco el SO
+  long rx_packets; //paquetes recibidos
+  long tx_packets; //paquetes transmitidos
+  int is_virtual;  //1 si es loopback, bridge o virtual
+} IfaceStats;
+\end{lstlisting}
+
+Cada campo tiene una fuente directa en \texttt{/proc/net/dev}:
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \texttt{name}: nombre de la interfaz, ej.\ \texttt{wlp1s0}, \texttt{lo}, \texttt{docker0}, es el
+  identificador que el kernel asigna a cada dispositivo de red.
+\item \texttt{rx\_bytes} / \texttt{tx\_bytes}: total de bytes recibidos y transmitidos desde que arrancó el
+  sistema, son contadores acumulados, no la velocidad actual. Para calcular velocidad se necesitan dos lecturas
+  separadas por un intervalo de tiempo.
+\item \texttt{rx\_packets} / \texttt{tx\_packets}: número de paquetes procesados, un paquete es la unidad mínima
+  de transmisión en red; su tamaño varía según el protocolo.
+\item \texttt{is\_virtual}: campo que calculamos nosotros, no viene de \texttt{/proc}. Marca si la interfaz es
+  virtual (no representa hardware real) para excluirla de los totales globales.
+\end{itemize}
+
+\medskip
+
+\textbf{¿Qué es una interfaz virtual y por qué importa distinguirla?}
+Una interfaz virtual es un dispositivo de red que existe solo en software, sin hardware físico detrás, los casos
+más comunes son:
+\begin{itemize}[leftmargin=1.5cm]
+\item \texttt{lo} (loopback): permite que los procesos del mismo sistema se comuniquen entre sí por red sin salir
+  al exterior. Todo lo que se envía a \texttt{127.0.0.1} pasa por aquí. Su tráfico no es tráfico real de
+  internet.
+\item \texttt{docker0}, \texttt{br-*} (bridges de Docker): Docker crea interfaces de tipo \textit{bridge} para
+  conectar los contenedores entre sí y con el host. Si no hay contenedores corriendo, su tráfico es cero.
+\item \texttt{veth*}: interfaces virtuales que Docker y otras herramientas de contenedores crean en pares para
+  conectar un contenedor al bridge.
+\item \texttt{virbr*}: bridges de \textit{libvirt} para máquinas virtuales con KVM/QEMU.
+\end{itemize}
+
+Las interfaces físicas (\texttt{wlp1s0}, \texttt{eth0}, \texttt{enp3s0}) son las que tienen hardware real
+(tarjeta WiFi, Ethernet) y por las que fluye el tráfico real de internet. El campo \texttt{is\_virtual} nos
+permite calcular totales que excluyan el ruido de las interfaces de software.
+
+\subsubsection*{NetConn, una conexión activa}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.h} struct NetConn}]
+/* NetConn:
+   una conexion TCP o UDP activa asociada a un proceso
+   /proc/net/tcp + /proc/[pid]/fd/ para cruzar con PID */
+typedef struct {
+  char protocol[8];      //"TCP" o "UDP"
+  char local_addr[48];   //direccion local ip:puerto en texto
+  char remote_addr[48];  //direccion remota ip:puerto en texto
+  char remote_host[128]; //hostname resuelto de la IP remota
+  char state[16];        //ESTABLISHED, LISTEN, TIME_WAIT, etc
+  int pid;               //PID del proceso dueno del socket
+  char proc_name[256];   //nombre del proceso
+  long inode;            //inodo del socket, sirve para cruzar datos
+  /* campos extra, solo disponibles con root via nf_conntrack */
+  long bytes_sent;      //bytes enviados en esta conexion
+  long bytes_recv;      //bytes recibidos en esta conexion
+  long packets_sent;
+  long packets_recv;
+  int has_traffic_data; //1 si pudimos leer nf_conntrack
+} NetConn;
+\end{lstlisting}
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \texttt{protocol}: \texttt{TCP} o \texttt{UDP} según el archivo de origen (\texttt{/proc/net/tcp} o
+  \texttt{/proc/net/udp}).
+\item \texttt{local\_addr} / \texttt{remote\_addr}: dirección IP y puerto en formato texto \texttt{"1.2.3.4:443"}
+  , convertidos desde el hexadecimal que almacena el kernel.
+\item \texttt{remote\_host}: resultado de la resolución DNS inversa de la IP remota. Si el servidor tiene un PTR
+  record, aquí aparece su nombre de dominio en lugar de la IP numérica.
+\item \texttt{state}: estado actual de la conexión según el protocolo TCP.
+\item \texttt{pid}: identificador del proceso dueño del socket, se obtiene cruzando el campo \texttt{inode} con
+  los file descriptors de cada proceso en \texttt{/proc/[pid]/fd/}.
+\item \texttt{inode}: número de inodo del socket en el sistema de archivos virtual, es la clave para cruzar
+  conexiones con procesos.
+\item \texttt{bytes\_sent}, \texttt{bytes\_recv}, \texttt{packets\_sent}, \texttt{packets\_recv}: estadísticas de
+  tráfico individuales por conexión. Solo disponibles cuando se corre como root y el módulo
+  \texttt{nf\_conntrack} tiene la contabilidad habilitada.
+\item \texttt{has\_traffic\_data}: bandera que indica si los campos de bytes contienen datos reales o están en
+  cero por falta de permisos.
+\end{itemize}
+
+\subsubsection*{NetSnapshot, la fotografía completa}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.h} struct NetSnapshot}]
+/* NetSnapshot:
+   fotografia completa del estado de red en un instante */
+typedef struct {
+  IfaceStats ifaces[MAX_IFACES];
+  int iface_count;
+  NetConn conns[MAX_CONNS];
+  int conn_count;
+  //Totales globales sumados de todas las interfaces (excepto lo)
+  long total_rx_bytes;
+  long total_tx_bytes;
+} NetSnapshot;
+\end{lstlisting}
+
+Al igual que \texttt{SystemSnapshot} en la implementación anterior, agrupa todos los datos de red en una sola
+estructura que se pasa por referencia. Los campos \texttt{total\_rx\_bytes} y \texttt{total\_tx\_bytes} son la
+suma de los bytes de todas las interfaces físicas (excluyendo virtuales), lo que da una visión global del
+tráfico real del sistema.
+
+% ----------------------------------------------------------------
+\subsection*{Por qué se necesita sudo}
+% ----------------------------------------------------------------
+
+La mayor parte de la información de red es pública: cualquier usuario puede leer \texttt{/proc/net/tcp} y
+\texttt{/proc/net/dev}. Sin embargo, hay dos cosas que requieren privilegios de root:
+
+\begin{enumerate}[leftmargin=1.5cm]
+\item \textbf{Leer \texttt{/proc/[pid]/fd/} de otros procesos.} Para cruzar los inodos de los sockets con PIDs,
+  necesitamos abrir el directorio de file descriptors de cada proceso, el kernel restringe este acceso: un
+  proceso solo puede ver los fd de procesos del mismo usuario. Como root, podemos ver los fd de todos los
+  procesos y por eso el cruce PID $\to$ proceso es más completo.
+  
+\item \textbf{Leer \texttt{/proc/net/nf\_conntrack}.} Este archivo es propiedad del grupo \texttt{root} y no
+  tiene permisos de lectura para otros usuarios. Contiene los contadores de bytes por conexión del módulo
+  netfilter.
+\end{enumerate}
+
+La función \texttt{is\_root()} verifica esto con una sola llamada al sistema:
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} --- is\_root() (líneas 119--125)}]
+/* Funcion que verifica si es root
+   getuid() == 0 significa proceso corriendo como root */
+int
+is_root(void)
+{
+  return getuid() == 0;
+}
+\end{lstlisting}
+
+\texttt{getuid()} es una llamada al sistema que devuelve el UID (User ID) real del proceso, en todos los
+sistemas Unix/Linux, el UID 0 está reservado para root.
+
+% ----------------------------------------------------------------
+\subsection*{Funciones auxiliares internas}
+% ----------------------------------------------------------------
+
+Antes de las funciones públicas, \texttt{net\_monitor.c} define cuatro funciones privadas
+(marcadas \texttt{static}) que se encargan de conversiones y utilidades.
+
+\subsubsection*{hex\_to\_ip de hexadecimal a IP legible}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} --- hex\_to\_ip() (líneas 10--24)}]
+static void
+hex_to_ip(const char *hex, char *out, size_t out_size)
+{
+  unsigned int addr;
+  sscanf(hex, "%X", &addr); //leemos el hex como entero sin signo
+  struct in_addr in;
+  in.s_addr = addr;         //asignamos sin reordenar bytes
+  //inet_ntoa convierte struct in_addr a "A.B.C.D"
+  snprintf(out, out_size, "%s", inet_ntoa(in));
+}
+\end{lstlisting}
+
+El kernel almacena las IPs en \texttt{/proc/net/tcp} como enteros hexadecimales en formato \textit{little-endian}, por ejemplo, \texttt{0101A8C0} representa la IP \texttt{192.168.1.1}, la función lee el hex como entero sin
+signo con \texttt{sscanf}, lo asigna directamente a \texttt{in\_addr.s\_addr} sin reordenar bytes (porque el
+kernel ya lo almacena en el orden correcto para \texttt{inet\_ntoa}), y \texttt{inet\_ntoa} hace la conversión
+final a texto.
+
+\subsubsection*{hex\_to\_port de hexadecimal a puerto decimal}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} hex\_to\_port()}]
+static int
+hex_to_port(const char *hex)
+{
+  int port;
+  sscanf(hex, "%X", &port);
+  return port;
+}
+\end{lstlisting}
+
+Los puertos también aparecen en hex en \texttt{/proc/net/tcp}. Por ejemplo, \texttt{01BB} es el puerto 443
+(HTTPS). La conversión es directa con \texttt{sscanf \%X}.
+
+\subsubsection*{tcp\_state\_str número de estado a texto}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} tcp\_state\_str()}]
+static const char*
+tcp_state_str(int st)
+{
+  switch (st) {
+  case 1:
+    return "ESTABLISHED";
+  case 2:
+    return "SYN_SENT";
+  case 3:
+    return "SYN_RECV";
+  case 4:
+    return "FIN_WAIT1";
+  case 5:
+    return "FIN_WAIT2";
+  case 6:
+    return "TIME_WAIT";
+  case 7:
+    return "CLOSE";
+  case 8:
+    return "CLOSE_WAIT";
+  case 9:
+    return "LAST_ACK";
+  case 10:
+    return "LISTEN";
+  case 11:
+    return "CLOSING";
+  default:
+    return "UNKNOWN";
+  }
+}
+\end{lstlisting}
+
+El kernel almacena el estado de cada conexión TCP como un entero en \texttt{/proc/net/tcp}, esta función mapea
+ese entero a su nombre estándar según la especificación del protocolo TCP (RFC 793). Los estados más relevantes:
+
+\begin{itemize}[leftmargin=1.5cm]
+\item \textbf{ESTABLISHED}: conexión activa, ambos lados intercambian datos.
+\item \textbf{LISTEN}: el proceso espera conexiones entrantes (un servidor).
+\item \textbf{SYN\_SENT}: el cliente envió el primer paquete del \textit{handshake}
+  TCP pero aún no recibió respuesta. Si persiste, puede indicar problemas de red.
+\item \textbf{TIME\_WAIT}: la conexión terminó pero el kernel la mantiene
+  brevemente para absorber paquetes retrasados.
+\item \textbf{CLOSE\_WAIT}: el otro extremo cerró la conexión, esperando
+  que este lado también cierre.
+\end{itemize}
+
+\subsubsection*{resolve\_hostname  DNS inverso}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} resolve\_hostname()}]
+static void
+resolve_hostname(const char *ip_str, char *out, size_t out_size)
+{
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  if (inet_pton(AF_INET, ip_str, &sa.sin_addr) != 1) {
+    strncpy(out, ip_str, out_size - 1);
+    return;
+  }
+  char host[128];
+  int result = getnameinfo(
+    (struct sockaddr *)&sa, sizeof(sa),
+    host, sizeof(host),
+    NULL, 0,
+    NI_NOFQDN   //nombre corto sin dominio completo
+  );
+  if (result == 0 && strcmp(host, ip_str) != 0)
+    strncpy(out, host, out_size - 1);
+  else
+    strncpy(out, ip_str, out_size - 1); //fallback a la IP numerica
+  out[out_size - 1] = '\0';
+}
+\end{lstlisting}
+
+Dado que las IPs en texto no son muy legibles, intentamos resolver cada IP remota a su nombre de dominio
+mediante una consulta DNS inversa (PTR record). \texttt{getnameinfo()} hace la consulta; si el servidor tiene
+un PTR record configurado, devuelve su hostname. Si no lo tiene (muchos servidores de CDN y nubes no lo
+configuran), la función devuelve la IP original como fallback. El flag \texttt{NI\_NOFQDN} acorta el nombre
+eliminando el dominio completo.
+
+\subsubsection*{format\_bytes bytes a formato legible}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} format\_bytes()}]
+static void
+format_bytes(long bytes, char *out, size_t out_size)
+{
+  if (bytes >= 1024 * 1024)
+    snprintf(out, out_size, "%.1f MB", bytes / (1024.0 * 1024.0));
+  else if (bytes >= 1024)
+    snprintf(out, out_size, "%.1f KB", bytes / 1024.0);
+  else
+    snprintf(out, out_size, "%ld B", bytes);
+}
+\end{lstlisting}
+
+Convierte un número de bytes crudos a una cadena legible con unidades, los umbrales son $1024$ bytes para KB y
+$1024 \times 1024$ para MB. Se usa solo para mostrar los datos de tráfico de \texttt{nf\_conntrack}.
+
+% ----------------------------------------------------------------
+\subsection*{collect\_net\_ifaces lectura de interfaces}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} collect\_net\_ifaces()}]
+void
+collect_net_ifaces(NetSnapshot *ns)
+{
+  FILE *f = fopen("/proc/net/dev", "r");
+  if (!f) return;
+  char line[256];
+  ns->iface_count = 0;
+  ns->total_rx_bytes = 0;
+  ns->total_tx_bytes = 0;
+  //Saltar las dos primeras lineas de encabezado
+  fgets(line, sizeof(line), f);
+  fgets(line, sizeof(line), f);
+  while (fgets(line, sizeof(line), f) && ns->iface_count < MAX_IFACES) {
+    IfaceStats *iface = &ns->ifaces[ns->iface_count];
+    int matched = sscanf(line,
+      " %31[^:]: %ld %ld %*ld %*ld %*ld %*ld %*ld %*ld %ld %ld",
+      iface->name,
+      &iface->rx_bytes, &iface->rx_packets,
+      &iface->tx_bytes, &iface->tx_packets);
+    if (matched != 5) continue;
+    //Marcamos interfaces virtuales
+    iface->is_virtual = (
+      strcmp (iface->name, "lo")      == 0 ||
+      strncmp(iface->name, "br-",  3) == 0 ||
+      strncmp(iface->name, "veth", 4) == 0 ||
+      strncmp(iface->name, "virbr",5) == 0 ||
+      strcmp (iface->name, "docker0") == 0);
+    //Acumulamos totales solo de interfaces fisicas reales
+    if (!iface->is_virtual) {
+      ns->total_rx_bytes += iface->rx_bytes;
+      ns->total_tx_bytes += iface->tx_bytes;
+    }
+    ns->iface_count++;
+  }
+  fclose(f);
+}
+\end{lstlisting}
+
+El archivo \texttt{/proc/net/dev} tiene dos líneas de encabezado que se saltan con dos llamadas a \texttt{fgets}. Cada línea de datos tiene el formato:
+
+\begin{Verbatim}[fontsize=\small]
+  eth0: rx_bytes rx_pkts rx_err rx_drop ... tx_bytes tx_pkts tx_err ...
+\end{Verbatim}
+
+El patrón de \texttt{sscanf} usa \texttt{\%*ld} para ignorar los campos que no necesitamos (errores, drops, fifo, frame), leyendo solo los bytes y paquetes. El patrón \texttt{\%31[\^{}:]} lee el nombre de la interfaz hasta
+el carácter \texttt{:} que actúa como separador.
+
+% ----------------------------------------------------------------
+\subsection*{collect\_net\_conns conexiones y cruce con PIDs}
+% ----------------------------------------------------------------
+
+Esta es la función más compleja de la implementación, opera en dos fases.
+
+\medskip
+
+\textbf{Fase 1: leer conexiones desde /proc/net/tcp y /proc/net/udp:}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} collect\_net\_conns() fase 1}]
+void
+collect_net_conns(NetSnapshot *ns)
+{
+  ns->conn_count = 0;
+    
+  const char *files[] = { "/proc/net/tcp", "/proc/net/udp" };
+  const char *protocols[] = { "TCP", "UDP" };
+  
+  for (int fi = 0; fi < 2 && ns->conn_count < MAX_CONNS; fi++) {
+    FILE *f = fopen(files[fi], "r");
+    if (!f)
+      continue;
+    
+    char line[512];
+    fgets(line, sizeof(line), f); //saltamos encabezado
+    
+    while (fgets(line, sizeof(line), f) && ns->conn_count < MAX_CONNS) {
+      char local_hex[12], remote_hex[12];
+      char local_port_hex[6], remote_port_hex[6];
+      int state_num;
+      long inode;
+      int matched = sscanf(line,
+			   " %*d: %8[^:]:%4s %8[^:]:%4s %X %*s %*s %*s %*d %*d %ld",
+			   local_hex,  local_port_hex,
+			   remote_hex, remote_port_hex,
+			   &state_num, &inode);
+      
+      if (matched != 6)
+	continue;
+      
+      NetConn *c = &ns->conns[ns->conn_count];
+      strncpy(c->protocol, protocols[fi], sizeof(c->protocol) - 1);
+      c->inode = inode;
+      c->pid = -1;
+      
+      char ip[INET_ADDRSTRLEN];
+      hex_to_ip(local_hex, ip, sizeof(ip));
+      snprintf(c->local_addr,  sizeof(c->local_addr),
+	       "%s:%d", ip, hex_to_port(local_port_hex));
+      
+      hex_to_ip(remote_hex, ip, sizeof(ip));
+      snprintf(c->remote_addr, sizeof(c->remote_addr),
+	       "%s:%d", ip, hex_to_port(remote_port_hex));
+      
+      strncpy(c->state, tcp_state_str(state_num), sizeof(c->state) - 1);
+      
+      if (state_num == 1 &&
+	  strncmp(remote_hex, "00000000", 8) != 0) {
+	char remote_ip[INET_ADDRSTRLEN];
+	hex_to_ip(remote_hex, remote_ip, sizeof(remote_ip));
+	resolve_hostname(remote_ip, c->remote_host, sizeof(c->remote_host));
+      } else {
+	strncpy(c->remote_host, c->remote_addr, sizeof(c->remote_host) - 1);
+      }
+      
+      ns->conn_count++;
+    }
+    fclose(f);
+  }
+  /* Fase 2: cruzar inodos con PIDs */
+}
+\end{lstlisting}
+
+Cada línea de \texttt{/proc/net/tcp} tiene el formato:
+
+\begin{Verbatim}[fontsize=\small]
+sl  local_address rem_address st tx_queue:rx_queue tr:tm uid timeout inode
+0:  0101A8C0:1F90 0202A8C0:01BB 01 00000000:00000000 00:0 0 1000 1 12345
+\end{Verbatim}
+
+El patrón de \texttt{sscanf} extrae la IP y puerto local y remoto en hex, el estado como entero, y el inodo.
+Los campos intermedios (colas, timer, uid) se ignoran con \texttt{\%*s} y \texttt{\%*d}.
+
+\medskip
+
+\textbf{Fase 2: cruzar inodos con PIDs:}
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} collect\_net\_conns() fase 2}]
+  /* Cruzamos inodos con PIDs
+     cada proceso tiene sus file descriptors en /proc/[pid]/fd/
+     los sockets aparecen como symlinks con destino "socket:[inode]"
+     iteramos todos los PIDs y todos sus fd hasta encontrar coincidencia */
+  DIR *proc_dir = opendir("/proc");
+  if (!proc_dir)
+    return;
+  
+  struct dirent *proc_entry;
+  while ((proc_entry = readdir(proc_dir)) != NULL) {
+    if (!isdigit(proc_entry->d_name[0]))
+      continue;
+    
+    int pid = atoi(proc_entry->d_name);
+    char fd_path[64];
+    snprintf(fd_path, sizeof(fd_path), "/proc/%d/fd", pid);
+    
+    DIR *fd_dir = opendir(fd_path);
+    if (!fd_dir)
+      continue;
+
+    struct dirent *fd_entry;
+    while ((fd_entry = readdir(fd_dir)) != NULL) {
+      if (fd_entry->d_name[0] == '.')
+	continue;
+      
+      char link_path[128], link_target[128];
+      snprintf(link_path, sizeof(link_path),
+	       "/proc/%d/fd/%s", pid, fd_entry->d_name);
+
+      ssize_t len = readlink(link_path, link_target, sizeof(link_target) - 1);
+      if (len < 0)
+	continue;
+      link_target[len] = '\0';
+      
+      if (strncmp(link_target, "socket:[", 8) != 0)
+	continue;
+      
+      long sock_inode;
+      sscanf(link_target, "socket:[%ld]", &sock_inode);
+      
+      //Buscamos este inodo en nuestro arreglo de conexiones 
+      for (int i = 0; i < ns->conn_count; i++) {
+	if (ns->conns[i].inode == sock_inode && ns->conns[i].pid == -1) {
+	  ns->conns[i].pid = pid;
+	  //Leemos nombre del proceso
+	  char comm_path[64];
+	  snprintf(comm_path, sizeof(comm_path), "/proc/%d/comm", pid);
+	  FILE *cf = fopen(comm_path, "r");
+	  if (cf) {
+	    fgets(ns->conns[i].proc_name, sizeof(ns->conns[i].proc_name), cf);
+	    ns->conns[i].proc_name[strcspn(ns->conns[i].proc_name, "\n")] = '\0';
+	    fclose(cf);
+	  }
+	}
+      }
+    }
+    closedir(fd_dir);
+  }
+  closedir(proc_dir);
+\end{lstlisting}
+
+El mecanismo de cruce funciona porque en Linux todo socket es un archivo, y cada proceso tiene un directorio
+\texttt{/proc/[pid]/fd/} donde sus file descriptors abiertos aparecen como enlaces simbólicos. Un socket
+aparece con el destino \texttt{"socket:[12345]"} donde \texttt{12345} es su inodo. Al leer ese enlace con
+\texttt{readlink()} y comparar el inodo con los que registramos en la fase 1, encontramos qué proceso es dueño
+de cada conexión.
+
+\medskip
+
+\textbf{Desafío encontrado:} sin root, \texttt{opendir("/proc/[pid]/fd")} falla para procesos de otros usuarios,
+devolviendo \texttt{NULL}. El código lo maneja con \texttt{if (!fd\_dir) continue}, simplemente salta ese
+proceso y continúa. Con root, se puede abrir el directorio de todos los procesos y el cruce es completo.
+
+% ----------------------------------------------------------------
+\subsection*{collect\_conntrack tráfico por conexión (solo root)}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} collect\_conntrack()}]
+void
+collect_conntrack(NetSnapshot *ns)
+{
+  FILE *f = fopen("/proc/net/nf_conntrack", "r");
+  if (!f) {
+    fprintf(stderr, "  [!] nf_conntrack no disponible\n");
+    return;
+  }
+  
+  char line[1024];
+  
+  while (fgets(line, sizeof(line), f)) {
+    if (strncmp(line, "ipv4", 4) != 0)
+      continue;
+    
+    char src_orig[48] = {0};
+    char dst_orig[48] = {0};
+    int sport_orig = 0;
+    int dport_orig = 0;
+    
+    char *p;
+    p = strstr(line, "src=");
+    if (!p)
+      continue;
+    sscanf(p + 4, "%47s", src_orig);
+    
+    //extraemos IP destino con el mismo patron
+    p = strstr(line, "dst=");
+    if (!p)
+      continue;
+    sscanf(p + 4, "%47s", dst_orig);
+    
+    //extraer puerto origen: +6 salta "sport="
+    p = strstr(line, "sport=");
+    if (!p)
+      continue;
+    sscanf(p + 6, "%d", &sport_orig);
+    
+    //extraer puerto destino: +6 salta "dport="
+    p = strstr(line, "dport=");
+    if (!p)
+      continue;
+    sscanf(p + 6, "%d", &dport_orig);
+    
+    long bytes_orig = 0, bytes_reply = 0;
+    long pkts_orig = 0, pkts_reply = 0;
+    int has_acct = 0;
+    
+    char *cursor = line;
+    int occ = 0;
+    while ((cursor = strstr(cursor, "bytes=")) != NULL) {
+      long val;
+      sscanf(cursor + 6, "%ld", &val); //+6 salta "bytes="
+      if (occ == 0) {
+	bytes_orig = val;
+	has_acct = 1;
+      } else {
+	bytes_reply = val;
+      }
+      occ++;
+      cursor++;
+    }
+    
+    cursor = line; occ = 0;
+    while ((cursor = strstr(cursor, "packets=")) != NULL) {
+      long val;
+      sscanf(cursor + 8, "%ld", &val); //+8 salta "packets="
+      if (occ == 0)
+	pkts_orig  = val;
+      else
+	pkts_reply = val;
+      occ++;
+      cursor++;
+    }
+    
+    char local_str[48], remote_str[48];
+    snprintf(local_str,  sizeof(local_str), "%s:%d", src_orig, sport_orig);
+    snprintf(remote_str, sizeof(remote_str), "%s:%d", dst_orig, dport_orig);
+    
+    for (int i = 0; i < ns->conn_count; i++) {
+      NetConn *c = &ns->conns[i];
+      if (strcmp(c->local_addr,  local_str)  == 0 &&
+	  strcmp(c->remote_addr, remote_str) == 0) {
+	c->bytes_sent = bytes_orig;
+	c->bytes_recv = bytes_reply;
+	c->packets_sent = pkts_orig;
+	    c->packets_recv = pkts_reply;
+	    c->has_traffic_data = has_acct; /* 0 si no hay acct   */
+	    break; /* cada conexion es unica, no seguir buscando  */
+      }
+    }
+  }
+  
+  fclose(f);
+}
+\end{lstlisting}
+
+El archivo \texttt{/proc/net/nf\_conntrack} tiene un formato por línea como:
+
+\begin{Verbatim}[fontsize=\small]
+ipv4 2 tcp 6 86399 ESTABLISHED src=192.168.1.1 dst=1.2.3.4 sport=12345
+     dport=443 packets=100 bytes=15000 src=1.2.3.4 dst=192.168.1.1
+     sport=443 dport=12345 packets=200 bytes=120000 [ASSURED]
+\end{Verbatim}
+
+Los campos \texttt{src}, \texttt{dst}, \texttt{sport} y \texttt{dport} aparecen dos veces: la primera vez para
+la dirección original (lo que enviamos) y la segunda para el reply (lo que recibimos). La función usa
+\texttt{strstr} en lugar de \texttt{sscanf} posicional porque el orden de los campos puede variar entre
+versiones del kernel.
+
+\medskip
+
+\textbf{Desafío importante:} los campos \texttt{bytes=} y \texttt{packets=} solo aparecen en la línea si el
+módulo \texttt{nf\_conntrack} fue cargado con la contabilidad habilitada (\texttt{nf\_conntrack\_acct=1}), si
+no está habilitada, la línea no tiene esos campos y \texttt{has\_acct} queda en 0, lo que significa que no se
+muestran datos de tráfico por conexión, lo cual es preferible a mostrar ceros engañosos. Además, los contadores
+solo empiezan desde el momento en que se habilita la contabilidad, no retroactivamente para conexiones ya
+establecidas.
+
+\medskip
+
+Para habilitarlo:
+
+\begin{Verbatim}[frame=single, rulecolor=\color{black!20}, fontsize=\small]
+sudo sysctl net.netfilter.nf_conntrack_acct=1
+\end{Verbatim}
+
+% ----------------------------------------------------------------
+\subsection*{cmp\_rx comparador para ordenamiento}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} cmp\_rx()}]
+static int
+cmp_rx(const void *a, const void *b)
+{
+  const IfaceStats *ia = (const IfaceStats *)a;
+  const IfaceStats *ib = (const IfaceStats *)b;
+  return (ib->rx_bytes > ia->rx_bytes) - (ib->rx_bytes < ia->rx_bytes);
+}
+\end{lstlisting}
+
+Ordena las interfaces de mayor a menor por bytes recibidos, usando el mismo patrón de comparación sin resta
+directa que \texttt{cmp\_mem} en la primera implementación, para evitar overflow en valores grandes de tipo
+\texttt{long}.
+
+% ----------------------------------------------------------------
+\subsection*{print\_net\_snapshot impresión}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{net\_monitor.c} print\_net\_snapshot()503)}]
+void print_net_snapshot(const NetSnapshot *ns) {
+  /* imprime todas las interfaces con sus contadores */
+  for (int i = 0; i < ns->iface_count; i++) { /* ... */ }
+
+  /* seccion de interfaces virtuales colapsada */
+  for (int i = 0; i < ns->iface_count; i++)
+    if (!iface->is_virtual) continue;
+    /* ... */
+
+  /* mayor y menor RX entre interfaces fisicas */
+  qsort(sorted_ifaces, real_count, sizeof(IfaceStats), cmp_rx);
+
+  /* conexiones: solo las que tienen PID resuelto,
+     filtrando UDP sin destino y mostrando datos de
+     trafico si has_traffic_data == 1              */
+  for (int i = 0; i < ns->conn_count; i++) {
+    if (c->pid == -1) continue;
+    if (strcmp(c->protocol, "UDP") == 0 &&
+        strncmp(c->remote_addr, "0.0.0.0", 7) == 0) continue;
+    /* ... printf ... */
+    if (c->has_traffic_data) {
+      format_bytes(c->bytes_sent, sent, sizeof(sent));
+      format_bytes(c->bytes_recv, recv, sizeof(recv));
+      printf("  ^%-10s v%-10s  pkts ^%ld/v%ld\n", ...);
+    }
+  }
+}
+\end{lstlisting}
+
+La función filtra dos tipos de entradas antes de imprimir: conexiones sin PID resuelto (proceso ya terminó o
+sin permisos) y sockets UDP sin dirección remota (sockets de escucha multicast que no representan conexiones
+reales). La columna de tráfico solo aparece cuando \texttt{has\_traffic\_data} es 1, evitando mostrar ceros que
+podrían interpretarse erróneamente como ausencia de tráfico.
+
+% ----------------------------------------------------------------
+\subsection*{Limitación: datos de velocidad en tiempo real}
+% ----------------------------------------------------------------
+
+Los valores de RX/TX bytes en \texttt{/proc/net/dev} son contadores acumulados desde el arranque del sistema,
+no velocidad actual, para calcular cuántos KB/s se están transfiriendo en este momento se necesitan dos lecturas
+separadas por un intervalo de tiempo y calcular la diferencia. Esto no es posible en un escaneo único y se
+implementará en la siguiente fase, donde el hilo recolector guardará el snapshot anterior y calculará el delta
+en cada tick.
+
+\medskip
+
+De igual forma, incluso con root y \texttt{nf\_conntrack\_acct} habilitado, si ninguna aplicación está enviando
+o recibiendo paquetes en el momento del escaneo, los contadores de esa conexión mostrarán solo el total
+histórico desde que se estableció la conexión, no actividad reciente. No hay forma de distinguir una conexión
+\textit{idle} de una activa sin hacer la comparación entre dos snapshots.
+
+% ----------------------------------------------------------------
+\subsection*{Decisión sobre Docker y siguiente implementación}
+% ----------------------------------------------------------------
+
+Durante la planeación del proyecto se consideró el uso de un contenedor Docker para garantizar reproducibilidad
+entre distribuciones, particularmente pensando en la dependencia de \textbf{GTK-4} y \textbf{libadwaita} para la
+interfaz gráfica. Sin embargo, dado que la implementación de la interfaz gráfica con GTK-4 queda fuera del
+alcance de este reporte, la necesidad de Docker desaparece: las únicas dependencias del proyecto son
+\texttt{gcc}, \texttt{cmake} y \texttt{libncurses-dev}, todas disponibles en cualquier distribución Linux con
+un solo comando.
+
+\medskip
+
+La \textbf{tercera y última implementación} sustituirá el \texttt{printf} por una interfaz de terminal
+interactiva construida con \textbf{ncurses}. Se introducirán dos hilos POSIX (uno recolector y uno de dibujado)
+para que la pantalla se actualice en tiempo real sin congelarse bajo carga alta.
+
+\medskip
+
+Para compilar y ejecutar el estado actual del proyecto:
+
+\begin{Verbatim}[frame=single, rulecolor=\color{black!20}, fontsize=\small]
+# instalar dependencias (Fedora)
+sudo dnf install gcc cmake ncurses-devel
+
+# instalar dependencias (Debian/Ubuntu)
+sudo apt install gcc cmake libncurses-dev
+
+# compilar
+cmake -B build && cmake --build build
+
+# monitor de memoria
+./build/src/sysmon
+
+# monitor de red (sin root: conexiones sin datos de trafico)
+./build/src/sysmon --net
+
+# monitor de red (con root: incluye bytes por conexion)
+sudo ./build/src/sysmon --net
+\end{Verbatim}
 \end{document}

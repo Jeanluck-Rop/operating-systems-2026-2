@@ -1471,4 +1471,771 @@ cmake -B build && cmake --build build
 # monitor de red (con root: incluye bytes por conexion)
 sudo ./build/src/sysmon --net
 \end{Verbatim}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% ================================================================
+\section*{Tercera Implementación: Interfaz de terminal con ncurses}
+% ================================================================
+
+\subsection*{Descripción general}
+
+Esta implementación sustituye el \texttt{printf} de las dos anteriores por una interfaz de terminal interactiva
+construida con la biblioteca \textbf{ncurses}. El resultado visible es el que muestran las capturas del proyecto
+: una pantalla dividida en header, contenido scrolleable y footer, con colores y actualización en tiempo real,
+todo dentro de la misma terminal sin abrir ninguna ventana gráfica.
+
+\medskip
+
+Se añaden dos archivos: \texttt{include/ui.h} con las definiciones de estado, y
+\texttt{src/ui.c} con toda la lógica de presentación. El \texttt{main.c} se
+reduce a una sola llamada: \texttt{ui\_run()}.
+
+\medskip
+
+El mayor desafío de esta implementación fue el desconocimiento previo de ncurse, a diferencia de \texttt{printf}
+, que imprime líneas de forma secuencial, \texttt{ncurses} trabaja con un modelo de \textbf{pantalla virtual}
+en la que uno debe posicionar cada carácter en coordenadas \texttt{(fila, columna)}, aplicas colores y atributos
+, y al final llamas a una función que vuelca solo los cambios a la pantalla real. Esto permite que el header y
+el footer sean visualmente estáticos mientras solo el contenido central se redibuja, y elimina el parpadeo que
+tendría un \texttt{clear} + \texttt{printf} repetido.
+
+% ----------------------------------------------------------------
+\subsection*{Cómo funciona \texttt{ncurses}}
+% ----------------------------------------------------------------
+
+\texttt{ncurses} intercepta la terminal al llamar \texttt{initscr()} y la divide en ventanas (\texttt{WINDOW*}).
+Cada ventana tiene su propio buffer en memoria. Las funciones de dibujo (\texttt{mvwprintw}, \texttt{waddch},
+etc.) escriben en ese buffer, no en pantalla. Solo cuando se llama \texttt{doupdate()} ncurses compara cada
+buffer con lo que la pantalla muestra actualmente y escribe únicamente los caracteres que cambiaron.
+Por eso no hay parpadeo aunque se redibuje todo cada tick.
+
+\medskip
+
+El ciclo de vida del programa con ncurses sigue siempre el mismo patrón:
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.65cm]
+    \node (init)    [startstop]                         {initscr()};
+    \node (loop)    [process,  below=of init]           {getch() sin bloqueo\\leer input del usuario};
+    \node (erase)   [process,  below=of loop]           {werase() cada ventana\\borrar buffer en memoria};
+    \node (draw)    [process,  below=of erase]          {mvwprintw / waddch\\dibujar en buffers};
+    \node (refresh) [process,  below=of draw]           {wnoutrefresh() + doupdate()\\volcar a pantalla};
+    \node (sleep)   [process,  below=of refresh]        {usleep(100ms)\\esperar siguiente frame};
+    \node (end)     [startstop,below=of sleep]          {endwin()};
+
+    \draw [arrow] (init)    -- (loop);
+    \draw [arrow] (loop)    -- (erase);
+    \draw [arrow] (erase)   -- (draw);
+    \draw [arrow] (draw)    -- (refresh);
+    \draw [arrow] (refresh) -- (sleep);
+    \draw [arrow] (sleep.east) -- ++(1.8,0) |- (loop.east)
+        node[midway, right, font=\small] {running};
+    \draw [arrow] (sleep)   -- (end) node[midway,right,font=\small]{q};
+\end{tikzpicture}
+\end{center}
+
+% ----------------------------------------------------------------
+\subsection*{Estructuras de datos: \texttt{ui.h}}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.h} completo}]
+typedef enum {
+  MODE_MEMORY = 0,
+  MODE_NET    = 1
+} DisplayMode;
+
+typedef struct {
+  DisplayMode mode;   //modo activo actualmente
+  int scroll_offset;  //primera fila visible en la tabla
+  int running;        //0 = salir del loop principal
+} UIState;
+
+void ui_run();
+\end{lstlisting}
+
+\texttt{DisplayMode} es un \texttt{enum} que representa el modo activo, usar un enum en lugar de un entero
+tiene la ventaja de que el compilador avisa si un \texttt{switch} no cubre todos los casos, evitando bugs
+silenciosos cuando se añadan modos nuevos.
+
+\medskip
+
+\texttt{UIState} agrupa el estado mínimo que necesita el loop de la UI entre frames, qué modo está activo,
+cuánto se ha scrolleado la tabla y si el programa debe seguir corriendo. Al pasarlo por puntero a las funciones
+de dibujo, cada función puede leer y modificar el offset del scroll sin variables globales.
+
+% ----------------------------------------------------------------
+\subsection*{Constantes de color y ventanas globales}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} constantes y ventanas}]
+#define COL_HEADER 1 //cyan, barra superior e inferior
+#define COL_TITLE  2 //cyan, encabezados de columna
+#define COL_LOW    3 //verde, uso bajo o conexion ok
+#define COL_MED    4 //amarillo, uso medio
+#define COL_HIGH   5 //rojo, uso alto o proceso pesado
+#define COL_NORMAL 6 //blanco, texto de filas normales
+
+static WINDOW *win_header;  //fila 0
+static WINDOW *win_content; //filas 1..(rows-3)
+static WINDOW *win_footer;  //ultimas 2 filas
+\end{lstlisting}
+
+Los pares de color se numeran del 1 en adelante, ncurses reserva el 0 para el par por defecto y no permite
+modificarlo. Las tres variables \texttt{WINDOW*} son \texttt{static} al módulo, ningún otro archivo las
+necesita, y al ser globales dentro del módulo todas las funciones de dibujo pueden acceder a ellas sin
+pasarlas como parámetros.
+
+% ----------------------------------------------------------------
+\subsection*{cmp\_mem\_ui comparador para qsort}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} cmp\_mem\_ui()}]
+static int
+cmp_mem_ui(const void *a,
+	   const void *b)
+{
+  const ProcessInfo *pa = (const ProcessInfo *)a;
+  const ProcessInfo *pb = (const ProcessInfo *)b;
+  return (pb->memory_kb > pa->memory_kb) - (pb->memory_kb < pa->memory_kb);
+}
+\end{lstlisting}
+
+Esta función existe en \texttt{ui.c} y no en \texttt{monitor.c} por una razón de alcance, en la implementación
+anterior el ordenamiento se hacía dentro de \texttt{print\_snapshot}, que ya no se usa en la interfaz ncurses.
+\texttt{draw\_content\_memory} necesita ordenar la copia local de procesos antes de dibujarla, así que se define
+el comparador aquí.
+
+\medskip
+
+La función está marcada \texttt{static} para que no sea visible fuera del módulo, está en el scope del módulo y
+no anidada dentro de \texttt{draw\_content\_memory} porque las
+\textbf{funciones anidadas no forman parte del estándar C99}, son una extensión de GCC que puede causar
+incompatibilidades. Al tenerla en el scope del módulo el código compila con cualquier compilador C99 o posterior.
+
+% ----------------------------------------------------------------
+\subsection*{init\_colors pares de color}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} init\_colors()}]
+static void
+init_colors()
+{
+  start_color();
+  use_default_colors();
+  init_pair(COL_HEADER, COLOR_BLACK, COLOR_CYAN);
+  init_pair(COL_TITLE,  COLOR_CYAN,  -1);
+  init_pair(COL_LOW,    COLOR_GREEN, -1);
+  init_pair(COL_MED,    COLOR_YELLOW,-1);
+  init_pair(COL_HIGH,   COLOR_RED,   -1);
+  init_pair(COL_NORMAL, COLOR_WHITE, -1);
+}
+\end{lstlisting}
+
+\texttt{start\_color()} habilita el subsistema de colores de ncurses, sin esta llamada \texttt{init\_pair} no
+tiene efecto. \texttt{use\_default\_colors()} permite usar \texttt{-1} como color de fondo, que ncurses
+interpreta como ``el fondo transparente de la terminal''. Esto es importante para que el fondo negro del sistema
+no se vea reemplazado por un negro sólido de ncurses que puede tener un tono diferente según el tema del
+terminal.
+
+\medskip
+
+\texttt{init\_pair(n, fg, bg)} define el par número \texttt{n}, después se activa con
+\texttt{wattron(win, COLOR\_PAIR(n))} y se desactiva con \texttt{wattroff}, el par \texttt{COL\_HEADER}
+usa fondo cyan con texto negro para las barras de header y footer; el resto usa \texttt{-1} como fondo para
+heredar el color de la terminal.
+
+% ----------------------------------------------------------------
+\subsection*{create\_windows newwin y delwin}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} create\_windows()}]
+static void
+create_windows()
+{
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  if (win_header) {
+    delwin(win_header);
+    win_header = NULL;
+  }
+  if (win_content) {
+    delwin(win_content);
+    win_content = NULL;
+  }
+  if (win_footer) {
+    delwin(win_footer);
+    win_footer = NULL;
+  }
+  win_header = newwin(1, cols, 0, 0);
+  win_content = newwin(rows - 3, cols, 1, 0);
+  win_footer = newwin(2, cols, rows - 2, 0);
+}
+\end{lstlisting}
+
+\textbf{\texttt{newwin(filas, cols, fila\_inicio, col\_inicio)}} crea una subventana de ncurses con su propio
+buffer de caracteres y su propio sistema de coordenadas. A partir de la llamada,
+\texttt{mvwprintw(win, 0, 0, ...)} siempre significa ``fila 0 de esa ventana'', independientemente de dónde
+esté la ventana en la pantalla real. Esto permite que las funciones de dibujo de header, content y footer sean
+completamente independientes entre sí, ninguna necesita saber la posición absoluta de las otras.
+
+\medskip
+
+\textbf{\texttt{delwin(win)}} libera la memoria del buffer de la ventana, es obligatorio llamarlo antes de crear
+una nueva ventana con las mismas dimensiones, sin \texttt{delwin}, cada redimensionado acumularía ventanas
+huérfanas en memoria. Por eso la función primero destruye las ventanas existentes y luego crea las nuevas con
+el tamaño actual de la terminal, que se obtiene con \texttt{getmaxyx(stdscr, rows, cols)}.
+
+\medskip
+
+Esta función se llama al inicio y también cuando ncurses entrega \texttt{KEY\_RESIZE}, la señal interna que
+indica que el usuario redimensionó la ventana del terminal.
+
+% ----------------------------------------------------------------
+\subsection*{draw\_bar wattron, waddch, wattroff}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_bar()}]
+static void
+draw_bar(WINDOW *win,
+	 int pct,
+	 int width)
+{
+  int filled = (int)((double)pct / 100.0 * width);
+  waddch(win, '[');
+  for (int i = 0; i < width; i++) {
+    if (i < filled) {
+      int col = pct > 85 ? COL_HIGH : pct > 60 ? COL_MED : COL_LOW;
+      wattron(win, COLOR_PAIR(col));
+      waddch(win, ACS_BLOCK);
+      wattroff(win, COLOR_PAIR(col));
+      wattron(win, COLOR_PAIR(COL_HEADER));
+    } else {
+      waddch(win, '.');
+    }
+  }
+  waddch(win, ']');
+}
+\end{lstlisting}
+
+\textbf{\texttt{waddch(win, ch)}} añade un solo carácter al buffer de la ventana en la posición actual del
+cursor interno de esa ventana, avanzando el cursor una posición. Es el equivalente ncurses de \texttt{putchar},
+pero escribe en el buffer de una ventana específica.
+
+\medskip
+
+\textbf{\texttt{wattron(win, attr)}} activa un atributo de texto en la ventana \texttt{win}. Todo lo que se
+imprima después tendrá ese atributo hasta que se llame \texttt{wattroff}, los atributos más usados son
+\texttt{COLOR\_PAIR(n)} para color, \texttt{A\_BOLD} para negrita y \texttt{A\_REVERSE} para invertir
+fondo y textom, se pueden combinar con el operador \texttt{|}.
+
+\medskip
+
+\textbf{\texttt{wattroff(win, attr)}} desactiva el atributo, el patrón correcto siempre es: activar antes de
+imprimir, desactivar inmediatamente después. Dejar un color activo más tiempo del necesario puede colorear texto
+que no debería estarlo si en el futuro se añade código entre medio.
+
+\medskip
+
+\textbf{\texttt{ACS\_BLOCK}} es una constante de ncurses que representa el carácter de bloque sólido, el
+prefijo \texttt{ACS\_} (Alternative Character Set) indica que ncurses usará el carácter correcto para la
+terminal actual, en terminales modernas es el bloque Unicode, en terminales antiguas usa el carácter más
+parecido disponible.
+
+% ----------------------------------------------------------------
+\subsection*{draw\_header wbkgd, werase, strftime, wnoutrefresh}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_header()}]
+static void
+draw_header(DisplayMode mode)
+{
+  int cols = getmaxx(win_header);
+  wbkgd(win_header, COLOR_PAIR(COL_HEADER));
+  werase(win_header);
+  const char *title = (mode == MODE_MEMORY)
+    ? "System Monitor [Memory]"
+    : "System Monitor [Net]";
+  wattron(win_header, COLOR_PAIR(COL_HEADER) | A_BOLD);
+  mvwprintw(win_header, 0, 1, "%s", title);
+  if (getuid() == 0)
+    mvwprintw(win_header, 0, (int)strlen(title) + 3, "[root]");
+  time_t now = time(NULL);
+  char timebuf[32];
+  strftime(timebuf, sizeof(timebuf), "%a %d %b  %H:%M:%S", localtime(&now));
+  mvwprintw(win_header, 0, cols - (int)strlen(timebuf) - 1, "%s", timebuf);
+  wattroff(win_header, COLOR_PAIR(COL_HEADER) | A_BOLD);
+  wnoutrefresh(win_header);
+}
+\end{lstlisting}
+
+\textbf{\texttt{wbkgd(win, attr)}} establece el carácter y atributo de fondo de toda la ventana, sin esta
+llamada, las celdas vacías de la ventana usarían el atributo por defecto del terminal, el header mostraría un
+parche de color cyan solo donde hay texto, dejando el resto en negro, con \texttt{wbkgd} todo el
+ancho del header queda en cyan aunque no haya texto.
+
+\medskip
+
+\textbf{\texttt{werase(win)}} borra el contenido del buffer de la ventana llenándolo con el carácter de fondo
+establecido por \texttt{wbkgd}, es el equivalente de \texttt{clear()} pero para una ventana específica.
+La diferencia con \texttt{wclear} es que \texttt{werase} no fuerza un redibujado completo en
+el siguiente \texttt{refresh}.
+
+\medskip
+
+\textbf{\texttt{mvwprintw(win, fila, col, fmt, ...)}} combina un movimiento de cursor y un \texttt{printf} en
+una sola llamada, el prefijo \texttt{mv} mueve el cursor a \texttt{(fila, col)} dentro de la ventana antes de
+imprimir, es la función de impresión posicional más usada en ncurses.
+
+\medskip
+
+\textbf{\texttt{strftime(buf, size, fmt, tm)}} formatea una estructura \texttt{struct tm} a texto según el
+patrón \texttt{fmt}, el patrón \texttt{"\%a \%d \%b  \%H:\%M:\%S"} produce cadenas como
+\texttt{"Tue 27 May  00:01:10"}: día de la semana abreviado, día del mes, mes abreviado, y hora en formato 24h.
+
+\medskip
+
+\textbf{\texttt{wnoutrefresh(win)}} marca la ventana como ``pendiente de actualizar'' pero
+\textbf{no escribe nada en la pantalla real todavía}, el volcado real ocurre cuando se llama
+\texttt{doupdate()} al final del frame. La razón de separar estas dos operaciones es evitar parpadeo, si cada
+ventana hiciera su propio \texttt{wrefresh}, la pantalla se actualizaría tres veces por frame
+(header, content, footer) y el ojo humano percibiría un parpadeo entre estados parciales.
+Con \texttt{wnoutrefresh} + \texttt{doupdate}, las tres ventanas se vuelcan a pantalla en un solo paso.
+
+% ----------------------------------------------------------------
+\subsection*{draw\_content\_memory scroll y color por filas}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_content\_memory()}]
+static void
+draw_content_memory(const SystemSnapshot *snap,
+		    UIState *state)
+{
+  int rows, cols;
+  getmaxyx(win_content, rows, cols);
+  (void)cols;
+  werase(win_content);
+  wattron(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwprintw(win_content, 0, 0,
+	    "%-6s  %-6s  %-16s  %-10s  %-10s  %-8s  %-15s  %s",
+	    "PID", "PPID", "Nombre", "RSS KB",
+	    "VmSize KB", "Estado", "Padre", "Comando");
+  wattroff(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwhline(win_content, 1, 0, ACS_HLINE, cols);
+  ProcessInfo sorted[MAX_PROCS];
+  memcpy(sorted, snap->processes,
+	 snap->process_count * sizeof(ProcessInfo));
+  qsort(sorted, snap->process_count, sizeof(ProcessInfo), cmp_mem_ui);
+  int available = rows - 2;
+  int total = snap->process_count;
+  if (state->scroll_offset > total - available)
+    state->scroll_offset = total - available;
+  if (state->scroll_offset < 0)
+    state->scroll_offset = 0;
+  for (int i = 0; i < available && (state->scroll_offset + i) < total; i++) {
+    int screen_row = 2 + i;
+    const ProcessInfo *p = &sorted[state->scroll_offset + i];
+    int col = (p->memory_kb > 500000) ? COL_HIGH :
+      (p->memory_kb > 100000) ? COL_MED : COL_NORMAL;
+    const char *st = p->state == 'R' ? "running"  :
+      p->state == 'S' ? "sleeping" :
+      p->state == 'D' ? "waiting"  :
+      p->state == 'Z' ? "zombie"   : "other";
+    char cmd[36];
+    snprintf(cmd, sizeof(cmd), "%.35s", p->cmdline[0] ? p->cmdline : p->name);
+    wattron(win_content, COLOR_PAIR(col));
+    mvwprintw(win_content, screen_row, 0,
+	      "%-6d  %-6d  %-16s  %-10ld  %-10ld  %-8s  %-15s  %s",
+	      p->process_id, p->parent_process_id,
+	      p->name, p->memory_kb, p->vm_size_kb,
+	      st, p->parent_name, cmd);
+    wattroff(win_content, COLOR_PAIR(col));
+  }
+  if (total > available) {
+    int pct = (state->scroll_offset * 100) / (total - available > 0 ? total - available : 1);
+    mvwprintw(win_content, rows / 2, cols - 5, " %3d%%", pct);
+  }
+  wnoutrefresh(win_content);
+}
+\end{lstlisting}
+
+El scroll se implementa con un índice \texttt{scroll\_offset} que indica cuál es el primer elemento del arreglo
+ordenado a mostrar, en cada frame se dibujan exactamente \texttt{available = rows - 2} filas, empezando desde
+\texttt{sorted[scroll\_offset]}. Las teclas \texttt{↑} y \texttt{↓} en el loop principal simplemente
+decrementan o incrementan \texttt{scroll\_offset}, y el siguiente frame refleja el cambio automáticamente.
+
+\medskip
+
+Las guardas \texttt{if (state->scroll\_offset > total - available)} evitan que el scroll se pase del final de
+la lista, y \texttt{if (...< 0)} evita valores negativos si se presiona \texttt{↑} en la primera posición.
+
+\medskip
+
+La función \textbf{\texttt{mvwhline(win, fila, col, ch, n)}} dibuja \texttt{n} repeticiones del carácter
+\texttt{ch} en horizontal, con \texttt{ACS\_HLINE} produce la línea separadora entre encabezados y datos.
+
+% ----------------------------------------------------------------
+\subsection*{draw\_content\_net sección fija + sección scrolleable}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_content\_net()}]
+static void
+draw_content_net(const NetSnapshot *ns,
+		 UIState *state)
+{
+  int rows, cols;
+  getmaxyx(win_content, rows, cols);
+  (void)cols;
+  werase(win_content);
+  wattron(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwprintw(win_content, 0, 0, "Interfaces fisicas:");
+  wattroff(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwprintw(win_content, 1, 0,
+	    "%-12s  %15s  %15s  %12s  %12s",
+	    "Interfaz", "RX bytes", "TX bytes",
+	    "RX pkts", "TX pkts");
+  mvwhline(win_content, 2, 0, ACS_HLINE, cols);
+  int iface_row = 3;
+  for (int i = 0; i < ns->iface_count; i++) {
+    const IfaceStats *iface = &ns->ifaces[i];
+    if (iface->is_virtual)
+      continue;
+    wattron(win_content, COLOR_PAIR(COL_LOW));
+    mvwprintw(win_content, iface_row++, 0,
+	      "%-12s  %15ld  %15ld  %12ld  %12ld",
+	      iface->name,
+	      iface->rx_bytes, iface->tx_bytes,
+	      iface->rx_packets, iface->tx_packets);
+    wattroff(win_content, COLOR_PAIR(COL_LOW));
+  }
+  int conn_start = iface_row + 1;
+  mvwhline(win_content, conn_start - 1, 0, ACS_HLINE, cols);
+  wattron(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwprintw(win_content, conn_start, 0, "Conexiones activas:");
+  wattroff(win_content, COLOR_PAIR(COL_TITLE) | A_BOLD);
+  mvwprintw(win_content, conn_start + 1, 0,
+	    "%-5s  %-5s  %-22s  %-28s  %-13s  %s",
+	    "PID", "Proto", "Local", "Remoto/Host",
+	    "Estado", "Proceso");
+  mvwhline(win_content, conn_start + 2, 0, ACS_HLINE, cols);
+  int header_rows = conn_start + 3; //filas usadas por interfaces + enc
+  int available = rows - header_rows;
+  int visible[MAX_CONNS];
+  int visible_count = 0;
+  for (int i = 0; i < ns->conn_count; i++) {
+    const NetConn *c = &ns->conns[i];
+    if (c->pid == -1)
+      continue;
+    if (strcmp(c->protocol, "UDP") == 0 && strncmp(c->remote_addr, "0.0.0.0", 7) == 0)
+      continue;
+    visible[visible_count++] = i;
+  }
+  if (state->scroll_offset > visible_count - available)
+    state->scroll_offset = visible_count - available;
+  if (state->scroll_offset < 0)
+    state->scroll_offset = 0;
+  for (int i = 0; i < available && (state->scroll_offset + i) < visible_count; i++) {
+    int ci = visible[state->scroll_offset + i];
+    const NetConn *c = &ns->conns[ci];
+    int screen_row = header_rows + i;
+    int col = (strcmp(c->state, "ESTABLISHED") == 0) ? COL_LOW :
+      (strcmp(c->state, "SYN_SENT") == 0) ? COL_MED : COL_NORMAL;
+    const char *remote = (c->remote_host[0] &&
+			  strcmp(c->remote_host, c->remote_addr) != 0)
+      ? c->remote_host : c->remote_addr;
+    wattron(win_content, COLOR_PAIR(col));
+    mvwprintw(win_content, screen_row, 0,
+	      "%-5d  %-5s  %-22s  %-28s  %-13s  %-16s",
+	      c->pid, c->protocol,
+	      c->local_addr, remote,
+	      c->state, c->proc_name);
+    if (c->has_traffic_data) {
+      char sent[16], recv[16];
+      if(c->bytes_sent >= 1024*1024)
+	snprintf(sent, sizeof(sent), "%.1fMB", c->bytes_sent / (1024.0*1024.0));
+      else if (c->bytes_sent >= 1024)
+	snprintf(sent, sizeof(sent), "%.1fKB", c->bytes_sent / 1024.0);
+      else
+	snprintf(sent, sizeof(sent), "%ldB", c->bytes_sent);
+      if (c->bytes_recv >= 1024*1024)
+	snprintf(recv, sizeof(recv), "%.1fMB", c->bytes_recv / (1024.0*1024.0));
+      else if (c->bytes_recv >= 1024)
+	snprintf(recv, sizeof(recv), "%.1fKB", c->bytes_recv / 1024.0);
+      else
+	snprintf(recv, sizeof(recv), "%ldB", c->bytes_recv);
+      wprintw(win_content, "  ^%-8s v%-8s p^%ld/v%ld",
+	      sent, recv, c->packets_sent, c->packets_recv);
+    }
+    wattroff(win_content, COLOR_PAIR(col));
+  }
+  wnoutrefresh(win_content);
+}
+\end{lstlisting}
+
+La sección de interfaces es fija: siempre ocupa las primeras filas del content y no participa en el scroll, la
+sección de conexiones sí scrollea, usando el mismo mecanismo de \texttt{scroll\_offset} que el modo memoria.
+El arreglo \texttt{visible[]} filtra previamente las conexiones que no deben mostrarse
+(sin PID resuelto, sockets UDP sin destino), para que \texttt{scroll\_offset} opere sobre el conjunto de filas
+realmente visibles y no sobre el arreglo completo que incluye entradas descartadas.
+
+% ----------------------------------------------------------------
+\subsection*{draw\_footer\_memory y draw\_footer\_net}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_footer\_memory()}]
+static void
+draw_footer_memory(const SystemSnapshot *snap)
+{
+  wbkgd(win_footer, COLOR_PAIR(COL_HEADER));
+  werase(win_footer);
+  wattron(win_footer, COLOR_PAIR(COL_HEADER));
+  long total = snap->memory_total_kb;
+  long used = snap->memory_used_kb;
+  int pct = total > 0 ? (int)((double)used / total * 100.0) : 0;
+  mvwprintw(win_footer, 0, 1, "RAM %ld/%ld MB ", used / 1024, total / 1024);
+  draw_bar(win_footer, pct, 20);
+  wprintw(win_footer, " %d%%  |  "
+	  "Swap %ld/%ld MB  |  procs: %d",
+	  pct,
+	  snap->swap_used_kb  / 1024,
+	  snap->swap_total_kb / 1024,
+	  snap->process_count);
+  mvwprintw(win_footer, 1, 1, "Arriba/Abajo: scroll   N: red   q: salir");
+  wattroff(win_footer, COLOR_PAIR(COL_HEADER));
+  wnoutrefresh(win_footer);
+}
+\end{lstlisting}
+
+\bigskip
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} draw\_footer\_memory()}]
+static void
+draw_footer_net(const NetSnapshot *ns)
+{
+  wbkgd(win_footer, COLOR_PAIR(COL_HEADER));
+  werase(win_footer);
+  wattron(win_footer, COLOR_PAIR(COL_HEADER));
+  mvwprintw(win_footer, 0, 1,
+	    "Total RX: %.1f MB   TX: %.1f MB   "
+	    "Interfaces: %d   Conexiones: %d",
+	    ns->total_rx_bytes / (1024.0 * 1024.0),
+	    ns->total_tx_bytes / (1024.0 * 1024.0),
+	    ns->iface_count,
+	    ns->conn_count);
+  mvwprintw(win_footer, 1, 1, "Arriba/Abajo: scroll   N: memoria   q: salir");
+  wattroff(win_footer, COLOR_PAIR(COL_HEADER));
+  wnoutrefresh(win_footer);
+}
+\end{lstlisting}
+
+El footer usa \texttt{wbkgd} + \texttt{werase} igual que el header para que todo el ancho tenga fondo cyan, la
+llamada a \texttt{draw\_bar} hereda el color activo del contexto (\texttt{COL\_HEADER}) para los puntos vacíos
+de la barra, y cambia temporalmente a \texttt{COL\_LOW}/\texttt{COL\_MED}/\texttt{COL\_HIGH} para los bloques
+llenos, restaurando \texttt{COL\_HEADER} después de cada bloque para que el resto del footer siga en cyan.
+
+% ----------------------------------------------------------------
+\subsection*{ui\_run el loop principal}
+% ----------------------------------------------------------------
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} ui\_run() inicialización}]
+void
+ui_run()
+{
+  setlocale(LC_ALL, "");
+  initscr();
+  cbreak();
+  noecho();
+  keypad(stdscr, TRUE);
+  nodelay(stdscr, TRUE);
+  curs_set(0);
+  if (!has_colors()) {
+    endwin();
+    fprintf(stderr, "El terminal no soporta colores\n");
+    return;
+  }
+  init_colors();
+  create_windows();
+  UIState state = { MODE_MEMORY, 0, 1 };
+  SystemSnapshot mem_snap;
+  NetSnapshot net_snap;
+  memset(&mem_snap, 0, sizeof(mem_snap));
+  memset(&net_snap, 0, sizeof(net_snap));
+  collect_memory(&mem_snap);
+  collect_processes(&mem_snap);
+  collect_net_ifaces(&net_snap);
+  collect_net_conns(&net_snap);
+  if (is_root())
+    collect_conntrack(&net_snap);
+  int tick_counter = 0;
+  const int TICK = 10;
+  while (state.running) {
+    int ch = getch();
+    switch (ch) {
+    case 'q':
+    case 'Q':
+      state.running = 0;
+      break;
+
+    case 'n':
+    case 'N':
+      /* codigo mas adelante */
+      break;
+
+    case KEY_UP:
+      if (state.scroll_offset > 0)
+	state.scroll_offset--;
+      break;
+    case KEY_DOWN:
+      state.scroll_offset++;
+      break;
+    case KEY_RESIZE:
+      //el usuario redimensiono la terminal, reconstruir ventanas
+      create_windows();
+      break;
+    default:
+      break;
+    }
+\end{lstlisting}
+
+\texttt{setlocale(LC\_ALL, "")} es obligatorio antes de \texttt{initscr} para que ncurses pueda mostrar
+caracteres multibyte como \texttt{ACS\_BLOCK} y \texttt{ACS\_HLINE}, sin esta llamada esos caracteres aparecen
+como símbolos incorrectos en terminales UTF-8.
+
+\medskip
+
+\texttt{nodelay(stdscr, TRUE)} es clave para el funcionamiento fluido del monitor, hace que \texttt{getch()}
+devuelva \texttt{ERR} inmediatamente si no hay input del usuario, en lugar de bloquear el hilo esperando una
+tecla. Sin esto, el programa se congela en \texttt{getch()} y nunca llega a redibujar la pantalla.
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} ui\_run() manejo de N con sudo}]
+    case 'n':
+    case 'N':
+      if (state.mode == MODE_MEMORY) {
+        if (getuid() != 0) {
+	  if (in_docker()) {
+	    /* en Docker sin --privileged no hay forma de escalar,
+	       mostrar mensaje claro al usuario */
+	  }
+	  def_prog_mode();
+	  endwin();
+	  printf("\n[sysmon] El modo red requiere root.\n");
+	  printf("[sysmon] Se solicitaran credenciales de sudo.\n\n");
+	  fflush(stdout);
+	  int ok = system("sudo -v 2>/dev/null");
+	  reset_prog_mode();
+	  refresh();
+	  create_windows();
+	  if (ok != 0)
+	    break;
+	  endwin();
+	  printf("\n[sysmon] Autenticado. Relanzando con privilegios...\n");
+	  fflush(stdout);
+	  char self[256];
+	  ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	  if (len > 0) {
+	    self[len] = '\0';
+	    char *args[] = { "sudo", self, NULL };
+	    execvp("sudo", args);
+	  }
+	  exit(EXIT_FAILURE);
+        }
+        state.mode = MODE_NET;
+        state.scroll_offset = 0;
+      } else {
+        state.mode = MODE_MEMORY;
+        state.scroll_offset = 0;
+      }
+      break;
+\end{lstlisting}
+
+El manejo de la tecla \texttt{N} resuelve un problema interesante, el modo red necesita root para leer
+\texttt{nf\_conntrack}, pero el programa puede haber arrancado sin privilegios. La solución es salir
+temporalmente de ncurses con \texttt{def\_prog\_mode()} + \texttt{endwin()} para poder imprimir en la terminal
+normal, pedir credenciales con \texttt{sudo -v}, y si la autenticación tiene éxito, relanzar el propio
+ejecutable con \texttt{execvp("sudo", args)}.
+
+\medskip
+
+\texttt{readlink("/proc/self/exe", ...)} obtiene la ruta absoluta del ejecutable actual, más fiable que
+\texttt{argv[0]}, que puede ser una ruta relativa o simplemente el nombre. Después \texttt{execvp} reemplaza el
+proceso actual por \texttt{sudo \textit{ruta}}, que arranca el monitor de nuevo con UID 0.
+
+\medskip
+
+\texttt{def\_prog\_mode()} y \texttt{reset\_prog\_mode()} son un par de funciones de ncurses que guardan y
+restauran la configuración del terminal, se usan cuando necesitamos salir brevemente de ncurses
+(para imprimir en terminal normal o pedir input) y volver sin tener que reinicializar todo el entorno.
+
+\begin{lstlisting}[style=modernc, caption={\texttt{ui.c} ui\_run() tick y cierre}]
+    draw_header(state.mode);
+    if (state.mode == MODE_MEMORY) {
+      draw_content_memory(&mem_snap, &state);
+      draw_footer_memory(&mem_snap);
+    } else {
+      draw_content_net(&net_snap, &state);
+      draw_footer_net(&net_snap);
+    }
+    doupdate();
+    tick_counter++;
+    if (tick_counter >= TICK) {
+      tick_counter = 0;
+      if (state.mode == MODE_MEMORY) {
+	memset(&mem_snap, 0, sizeof(mem_snap));
+	collect_memory(&mem_snap);
+	collect_processes(&mem_snap);
+      } else {
+	memset(&net_snap, 0, sizeof(net_snap));
+	collect_net_ifaces(&net_snap);
+	collect_net_conns(&net_snap);
+	if (is_root())
+	  collect_conntrack(&net_snap);
+      }
+    }
+    usleep(100 * 1000);
+  }
+  delwin(win_header);
+  delwin(win_content);
+  delwin(win_footer);
+  endwin();
+}
+\end{lstlisting}
+
+El tick de recolección está desacoplado del frame rate: la pantalla se actualiza a 10 fps (cada 100 ms) pero los
+datos se recolectan solo una vez por segundo (cada 10 frames), esto evita que la lectura de \texttt{/proc}, que
+implica muchas llamadas al sistema, compita con el dibujado de la UI en cada frame.
+
+\medskip
+
+Al terminar el loop, \texttt{delwin} libera las tres ventanas y \texttt{endwin()} restaura la terminal a su
+estado original, configuración del cursor, modo de input, colores. Esta llamada es \textbf{siempre obligatoria}
+antes de salir, sin ella la terminal queda en modo ncurses y el usuario no puede ver lo que escribe hasta cerrar
+y reabrir la sesión.
+
+% ----------------------------------------------------------------
+\subsection*{Compilación y ejecución}
+% ----------------------------------------------------------------
+
+\begin{Verbatim}[frame=single, rulecolor=\color{black!20}, fontsize=\small]
+# instalar ncurses si no está (Fedora)
+sudo dnf install ncurses-devel
+
+# instalar ncurses si no está (Debian/Ubuntu)
+sudo apt install libncurses-dev
+
+# compilar
+cmake -B build && cmake --build build
+
+# lanzar (modo memoria por defecto)
+./build/src/sysmon
+
+# dentro del monitor:
+#   N  -> cambiar a modo red (pide sudo la primera vez)
+#   ↑↓ -> scroll por la tabla
+#   q  -> salir
+\end{Verbatim}
+
 \end{document}

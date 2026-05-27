@@ -2,7 +2,7 @@ add_executable(sysmon
     main.c
     monitor.c
     net_monitor.c
-    #ui.c
+    ui.c
 )
 
 target_include_directories(sysmon PRIVATE
